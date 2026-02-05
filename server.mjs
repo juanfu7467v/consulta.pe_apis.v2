@@ -7,13 +7,18 @@ import cors from "cors";
 dotenv.config();
 
 const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// 🟢 MIDDLEWARE DE SEGURIDAD Y PARSEO
+// Límite de tamaño para evitar ataques de desbordamiento en el body
+app.use(express.json({ limit: '100kb' })); 
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
 // 🟢 Configuración de CORS
+// Nota: Para máxima seguridad, en producción deberías cambiar origin: "*" 
+// por el dominio específico de tu frontend (ej: "https://miweb.com").
 const corsOptions = {
-  origin: "*",
-  methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+  origin: "*", 
+  methods: "POST,OPTIONS", // Solo permitimos POST y OPTIONS (preflight)
   allowedHeaders: ["Content-Type", "x-api-key", "x-admin-key"],
   exposedHeaders: ["x-api-key", "x-admin-key"],
   credentials: true,
@@ -55,20 +60,20 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// -------------------- HELPER DE PARÁMETROS --------------------
-const getQueryParams = (req) => {
-  return req.method === 'GET' ? req.query : req.body;
-};
-
-// -------------------- MIDDLEWARE --------------------
+// -------------------- MIDDLEWARE DE AUTENTICACIÓN --------------------
 const authMiddleware = async (req, res, next) => {
   if (req.method === 'OPTIONS') {
     return next();
   }
   
+  // Verificamos que sea POST (Seguridad extra)
+  if (req.method !== 'POST') {
+     return res.status(405).json({ success: false, error: "Método no permitido. Solo se acepta POST." });
+  }
+
   const token = req.headers["x-api-key"];
   if (!token) {
-    return res.status(401).json({ success: false, error: "Falta el token de API" });
+    return res.status(401).json({ success: false, error: "Falta el token de API (x-api-key)" });
   }
 
   try {
@@ -133,9 +138,7 @@ const authMiddleware = async (req, res, next) => {
 
 const creditosMiddleware = (costo) => {
   return async (req, res, next) => {
-    if (req.method === 'OPTIONS') {
-      return next();
-    }
+    if (req.method === 'OPTIONS') return next();
     
     const domain = req.headers.origin || req.headers.referer || "Unknown/Direct Access";
     
@@ -163,10 +166,10 @@ const creditosMiddleware = (costo) => {
 // -------------------- FUNCIONES DE APOYO --------------------
 const generateMetaData = () => {
   return {
-    version: "2.0.4",
+    version: "2.0.5", // Versión actualizada
     timestamp: new Date().toISOString(),
     request_id: `req_${Math.random().toString(36).substring(2, 15)}`,
-    server: "cluster-aws-pe-01"
+    server: "cluster-aws-pe-secure-01"
   };
 };
 
@@ -213,6 +216,7 @@ const deducirCreditosFirebase = async (req, costo) => {
 
 const guardarLogExterno = async (logData) => {
   const horaConsulta = new Date(logData.timestamp).toISOString();
+  // Nota: Incluso si guardamos el log por GET, tus endpoints principales ahora son solo POST.
   const url = `${LOG_GUARDADO_BASE_URL}/log_consulta?host=${encodeURIComponent(logData.domain)}&hora=${encodeURIComponent(horaConsulta)}&endpoint=${encodeURIComponent(logData.endpoint)}&userId=${encodeURIComponent(logData.userId)}&costo=${logData.cost}`;
   
   try {
@@ -227,8 +231,8 @@ const limpiarRespuestaProveedor = (data) => {
   
   const cleaned = { ...data };
   
-  // Eliminar campos comunes de proveedores
-  delete cleaned.developed-by;
+  // CORRECCIÓN CRÍTICA: Uso de corchetes para propiedades con guiones
+  delete cleaned["developed-by"]; // <--- AQUÍ ESTABA EL ERROR
   delete cleaned.credits;
   delete cleaned.bot_used;
   delete cleaned.bot;
@@ -266,6 +270,8 @@ const formatoRespuestaEstandar = (success, data, user, metadata = null) => {
 
 const consumirAPIProveedor = async (req, res, url, costo) => {
   try {
+    // La petición al proveedor sigue siendo GET si ellos lo requieren,
+    // pero TU API ahora solo acepta POST de tus clientes.
     const response = await axios.get(url);
     
     if (response.status >= 200 && response.status < 300) {
@@ -294,122 +300,117 @@ const consumirAPIProveedor = async (req, res, url, costo) => {
   }
 };
 
-// -------------------- NUEVAS RUTAS (11 APIs) --------------------
+// -------------------- RUTAS SEGURAS (SOLO POST) --------------------
 
 // 1. RENIEC (7 créditos)
 app.post("/api/reniec", authMiddleware, creditosMiddleware(7), async (req, res) => {
-  const { dni } = getQueryParams(req);
+  const { dni } = req.body; // Solo lee del Body (POST)
   if (!dni) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "DNI requerido" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "DNI requerido en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_RENIEC}/reniec?dni=${dni}`, 7);
 });
 
 // 2. Telefonía por Documento (9 créditos)
 app.post("/api/telefonia-doc", authMiddleware, creditosMiddleware(9), async (req, res) => {
-  const { documento } = getQueryParams(req);
+  const { documento } = req.body;
   if (!documento) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Documento requerido" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Documento requerido en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_TELEFONIA}/telefonia-doc?documento=${documento}`, 9);
 });
 
 // 3. Telefonía por Número de Teléfono (8 créditos)
 app.post("/api/telefonia-num", authMiddleware, creditosMiddleware(8), async (req, res) => {
-  const { numero } = getQueryParams(req);
+  const { numero } = req.body;
   if (!numero) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Número requerido" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Número requerido en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_TELEFONIA}/telefonia-num?numero=${numero}`, 8);
 });
 
 // 4. Datos SUNARP PROPIETARIO/VEHÍCULO (8 créditos)
 app.post("/api/vehiculos", authMiddleware, creditosMiddleware(8), async (req, res) => {
-  const { placa } = getQueryParams(req);
+  const { placa } = req.body;
   if (!placa) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Placa requerida" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Placa requerida en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_SUNARP}/vehiculos?placa=${placa}`, 8);
 });
 
 // 5. SUNAT por RUC (6 créditos)
 app.post("/api/sunat", authMiddleware, creditosMiddleware(6), async (req, res) => {
-  const { data } = getQueryParams(req);
+  const { data } = req.body;
   if (!data) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "RUC requerido" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "RUC requerido en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_SUNAT}/sunat?data=${data}`, 6);
 });
 
 // 6. SUNAT por Razón Social (5 créditos)
 app.post("/api/sunat-razon", authMiddleware, creditosMiddleware(5), async (req, res) => {
-  const { data } = getQueryParams(req);
+  const { data } = req.body;
   if (!data) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Razón social requerida" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Razón social requerida en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_SUNAT}/sunat-razon?data=${data}`, 5);
 });
 
 // 7. Empresas donde figura (4 créditos)
 app.post("/api/empresas", authMiddleware, creditosMiddleware(4), async (req, res) => {
-  const { dni } = getQueryParams(req);
+  const { dni } = req.body;
   if (!dni) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "DNI requerido" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "DNI requerido en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_EMPRESAS}/empresas?dni=${dni}`, 4);
 });
 
 // 8. Matrimonios Registrados (6 créditos)
 app.post("/api/matrimonios", authMiddleware, creditosMiddleware(6), async (req, res) => {
-  const { dni } = getQueryParams(req);
+  const { dni } = req.body;
   if (!dni) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "DNI requerido" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "DNI requerido en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_MATRIMONIOS}/matrimonios?dni=${dni}`, 6);
 });
 
 // 9. BUSCAR DNI POR NOMBRES Y APELLIDOS (5 créditos)
 app.post("/api/dni_nombres", authMiddleware, creditosMiddleware(5), async (req, res) => {
-  const { nombres, apepaterno, apematerno } = getQueryParams(req);
+  const { nombres, apepaterno, apematerno } = req.body;
   if (!nombres || !apepaterno || !apematerno) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Nombres y apellidos requeridos" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Nombres y apellidos requeridos en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_DNI_NOMBRES}/dni_nombres?nombres=${nombres}&apepaterno=${apepaterno}&apematerno=${apematerno}`, 5);
 });
 
 // 10. BUSCAR CÉDULA POR NOMBRES Y APELLIDOS (5 créditos)
 app.post("/api/venezolanos_nombres", authMiddleware, creditosMiddleware(5), async (req, res) => {
-  const { query } = getQueryParams(req);
+  const { query } = req.body;
   if (!query) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Query requerido" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Query requerido en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_VENEZOLANOS}/venezolanos_nombres?query=${encodeURIComponent(query)}`, 5);
 });
 
 // 11. CONSULTAR CÉDULA (5 créditos)
 app.post("/api/cedula", authMiddleware, creditosMiddleware(5), async (req, res) => {
-  const { cedula } = getQueryParams(req);
+  const { cedula } = req.body;
   if (!cedula) {
-    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Cédula requerida" }, req.user));
+    return res.status(400).json(formatoRespuestaEstandar(false, { error: "Cédula requerida en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_CEDULA}/cedula?cedula=${cedula}`, 5);
 });
 
-// -------------------- ENDPOINT RAIZ --------------------
-app.use("/", (req, res) => {
-  if (req.method === 'OPTIONS') {
-    res.status(204).end();
-    return;
-  }
-  
+// -------------------- ENDPOINT RAIZ (HEALTH CHECK) --------------------
+// Mantenemos GET solo aquí para que Fly.io verifique que la app vive.
+app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "🚀 API Consulta PE funcionando correctamente",
+    message: "🚀 API Consulta PE Segura v2.0.5 funcionando",
     meta: generateMetaData(),
-    "consulta-pe": {
-      poweredBy: "Intermediario Consulta Pe v2",
-      status: "Operational",
-      endpoints: 11
+    security: {
+      mode: "Strict POST",
+      encryption: "TLS/SSL Enforced via Edge"
     }
   });
 });
@@ -417,5 +418,5 @@ app.use("/", (req, res) => {
 // -------------------- SERVER --------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
+  console.log(`🚀 Servidor Seguro corriendo en http://localhost:${PORT}`);
 });
