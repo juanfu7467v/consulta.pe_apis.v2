@@ -166,7 +166,7 @@ const creditosMiddleware = (costo) => {
 // -------------------- FUNCIONES DE APOYO --------------------
 const generateMetaData = () => {
   return {
-    version: "2.0.5", // Versión actualizada
+    version: "3.0.0", // Actualizado a v3
     timestamp: new Date().toISOString(),
     request_id: `req_${Math.random().toString(36).substring(2, 15)}`,
     server: "cluster-aws-pe-secure-01"
@@ -232,7 +232,7 @@ const limpiarRespuestaProveedor = (data) => {
   const cleaned = { ...data };
   
   // CORRECCIÓN CRÍTICA: Uso de corchetes para propiedades con guiones
-  delete cleaned["developed-by"]; // <--- AQUÍ ESTABA EL ERROR
+  delete cleaned["developed-by"]; 
   delete cleaned.credits;
   delete cleaned.bot_used;
   delete cleaned.bot;
@@ -301,18 +301,19 @@ const consumirAPIProveedor = async (req, res, url, costo) => {
 };
 
 // -------------------- RUTAS SEGURAS (SOLO POST) --------------------
+// AHORA TODAS BAJO EL PREFIJO /v3/consulta/
 
-// 1. RENIEC (7 créditos)
-app.post("/api/reniec", authMiddleware, creditosMiddleware(7), async (req, res) => {
-  const { dni } = req.body; // Solo lee del Body (POST)
+// 1. RENIEC (7 créditos) -> /v3/consulta/dni
+app.post("/v3/consulta/dni", authMiddleware, creditosMiddleware(7), async (req, res) => {
+  const { dni } = req.body;
   if (!dni) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "DNI requerido en el body" }, req.user));
   }
   await consumirAPIProveedor(req, res, `${API_URL_RENIEC}/reniec?dni=${dni}`, 7);
 });
 
-// 2. Telefonía por Documento (9 créditos)
-app.post("/api/telefonia-doc", authMiddleware, creditosMiddleware(9), async (req, res) => {
+// 2. Telefonía por Documento (9 créditos) -> /v3/consulta/telefonia-doc
+app.post("/v3/consulta/telefonia-doc", authMiddleware, creditosMiddleware(9), async (req, res) => {
   const { documento } = req.body;
   if (!documento) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Documento requerido en el body" }, req.user));
@@ -320,8 +321,8 @@ app.post("/api/telefonia-doc", authMiddleware, creditosMiddleware(9), async (req
   await consumirAPIProveedor(req, res, `${API_URL_TELEFONIA}/telefonia-doc?documento=${documento}`, 9);
 });
 
-// 3. Telefonía por Número de Teléfono (8 créditos)
-app.post("/api/telefonia-num", authMiddleware, creditosMiddleware(8), async (req, res) => {
+// 3. Telefonía por Número de Teléfono (8 créditos) -> /v3/consulta/telefonia-num
+app.post("/v3/consulta/telefonia-num", authMiddleware, creditosMiddleware(8), async (req, res) => {
   const { numero } = req.body;
   if (!numero) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Número requerido en el body" }, req.user));
@@ -329,8 +330,8 @@ app.post("/api/telefonia-num", authMiddleware, creditosMiddleware(8), async (req
   await consumirAPIProveedor(req, res, `${API_URL_TELEFONIA}/telefonia-num?numero=${numero}`, 8);
 });
 
-// 4. Datos SUNARP PROPIETARIO/VEHÍCULO (8 créditos)
-app.post("/api/vehiculos", authMiddleware, creditosMiddleware(8), async (req, res) => {
+// 4. Datos SUNARP (8 créditos) -> /v3/consulta/placa
+app.post("/v3/consulta/placa", authMiddleware, creditosMiddleware(8), async (req, res) => {
   const { placa } = req.body;
   if (!placa) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Placa requerida en el body" }, req.user));
@@ -338,8 +339,8 @@ app.post("/api/vehiculos", authMiddleware, creditosMiddleware(8), async (req, re
   await consumirAPIProveedor(req, res, `${API_URL_SUNARP}/vehiculos?placa=${placa}`, 8);
 });
 
-// 5. SUNAT por RUC (6 créditos)
-app.post("/api/sunat", authMiddleware, creditosMiddleware(6), async (req, res) => {
+// 5. SUNAT por RUC (6 créditos) -> /v3/consulta/ruc
+app.post("/v3/consulta/ruc", authMiddleware, creditosMiddleware(6), async (req, res) => {
   const { data } = req.body;
   if (!data) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "RUC requerido en el body" }, req.user));
@@ -347,8 +348,8 @@ app.post("/api/sunat", authMiddleware, creditosMiddleware(6), async (req, res) =
   await consumirAPIProveedor(req, res, `${API_URL_SUNAT}/sunat?data=${data}`, 6);
 });
 
-// 6. SUNAT por Razón Social (5 créditos)
-app.post("/api/sunat-razon", authMiddleware, creditosMiddleware(5), async (req, res) => {
+// 6. SUNAT por Razón Social (5 créditos) -> /v3/consulta/razon-social
+app.post("/v3/consulta/razon-social", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { data } = req.body;
   if (!data) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Razón social requerida en el body" }, req.user));
@@ -356,8 +357,8 @@ app.post("/api/sunat-razon", authMiddleware, creditosMiddleware(5), async (req, 
   await consumirAPIProveedor(req, res, `${API_URL_SUNAT}/sunat-razon?data=${data}`, 5);
 });
 
-// 7. Empresas donde figura (4 créditos)
-app.post("/api/empresas", authMiddleware, creditosMiddleware(4), async (req, res) => {
+// 7. Empresas donde figura (4 créditos) -> /v3/consulta/empresas
+app.post("/v3/consulta/empresas", authMiddleware, creditosMiddleware(4), async (req, res) => {
   const { dni } = req.body;
   if (!dni) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "DNI requerido en el body" }, req.user));
@@ -365,8 +366,8 @@ app.post("/api/empresas", authMiddleware, creditosMiddleware(4), async (req, res
   await consumirAPIProveedor(req, res, `${API_URL_EMPRESAS}/empresas?dni=${dni}`, 4);
 });
 
-// 8. Matrimonios Registrados (6 créditos)
-app.post("/api/matrimonios", authMiddleware, creditosMiddleware(6), async (req, res) => {
+// 8. Matrimonios Registrados (6 créditos) -> /v3/consulta/matrimonios
+app.post("/v3/consulta/matrimonios", authMiddleware, creditosMiddleware(6), async (req, res) => {
   const { dni } = req.body;
   if (!dni) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "DNI requerido en el body" }, req.user));
@@ -374,8 +375,8 @@ app.post("/api/matrimonios", authMiddleware, creditosMiddleware(6), async (req, 
   await consumirAPIProveedor(req, res, `${API_URL_MATRIMONIOS}/matrimonios?dni=${dni}`, 6);
 });
 
-// 9. BUSCAR DNI POR NOMBRES Y APELLIDOS (5 créditos)
-app.post("/api/dni_nombres", authMiddleware, creditosMiddleware(5), async (req, res) => {
+// 9. BUSCAR DNI POR NOMBRES (5 créditos) -> /v3/consulta/buscar-dni
+app.post("/v3/consulta/buscar-dni", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { nombres, apepaterno, apematerno } = req.body;
   if (!nombres || !apepaterno || !apematerno) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Nombres y apellidos requeridos en el body" }, req.user));
@@ -383,8 +384,8 @@ app.post("/api/dni_nombres", authMiddleware, creditosMiddleware(5), async (req, 
   await consumirAPIProveedor(req, res, `${API_URL_DNI_NOMBRES}/dni_nombres?nombres=${nombres}&apepaterno=${apepaterno}&apematerno=${apematerno}`, 5);
 });
 
-// 10. BUSCAR CÉDULA POR NOMBRES Y APELLIDOS (5 créditos)
-app.post("/api/venezolanos_nombres", authMiddleware, creditosMiddleware(5), async (req, res) => {
+// 10. BUSCAR CÉDULA POR NOMBRES (5 créditos) -> /v3/consulta/buscar-cedula
+app.post("/v3/consulta/buscar-cedula", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { query } = req.body;
   if (!query) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Query requerido en el body" }, req.user));
@@ -392,8 +393,8 @@ app.post("/api/venezolanos_nombres", authMiddleware, creditosMiddleware(5), asyn
   await consumirAPIProveedor(req, res, `${API_URL_VENEZOLANOS}/venezolanos_nombres?query=${encodeURIComponent(query)}`, 5);
 });
 
-// 11. CONSULTAR CÉDULA (5 créditos)
-app.post("/api/cedula", authMiddleware, creditosMiddleware(5), async (req, res) => {
+// 11. CONSULTAR CÉDULA (5 créditos) -> /v3/consulta/cedula
+app.post("/v3/consulta/cedula", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { cedula } = req.body;
   if (!cedula) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Cédula requerida en el body" }, req.user));
@@ -402,11 +403,10 @@ app.post("/api/cedula", authMiddleware, creditosMiddleware(5), async (req, res) 
 });
 
 // -------------------- ENDPOINT RAIZ (HEALTH CHECK) --------------------
-// Mantenemos GET solo aquí para que Fly.io verifique que la app vive.
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "🚀 API Consulta PE Segura v2.0.5 funcionando",
+    message: "🚀 API Consulta PE Segura v3.0.0 funcionando",
     meta: generateMetaData(),
     security: {
       mode: "Strict POST",
@@ -417,6 +417,6 @@ app.get("/", (req, res) => {
 
 // -------------------- SERVER --------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor Seguro corriendo en http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Servidor Seguro corriendo en http://0.0.0.0:${PORT}`);
 });
