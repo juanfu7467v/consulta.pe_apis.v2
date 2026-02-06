@@ -37,174 +37,6 @@ const API_URL_VENEZOLANOS = process.env.API_URL_VENEZOLANOS || "https://bankend-
 const API_URL_CEDULA = process.env.API_URL_CEDULA || "https://bankend-tlgm-2p.fly.dev";
 const LOG_GUARDADO_BASE_URL = process.env.LOG_GUARDADO_URL || "https://base-datos-consulta-pe.fly.dev/guardar";
 
-// -------------------- FUNCIONES DE PROCESAMIENTO DE RESPUESTAS --------------------
-/**
- * Función para limpiar y estructurar las respuestas de las APIs especiales
- * @param {string} data - Respuesta cruda de la API
- * @param {string} endpointType - Tipo de endpoint para procesamiento específico
- * @returns {Array|Object} Datos estructurados en JSON
- */
-const procesarRespuestaEspecial = (data, endpointType) => {
-  try {
-    // Si ya es un objeto JSON, limpiarlo si es necesario
-    if (typeof data === 'object') {
-      return limpiarRespuestaProveedor(data);
-    }
-    
-    // Si es string, procesar según el formato específico
-    if (typeof data === 'string') {
-      // Para mensajes que contienen la estructura específica con "Se encontro X resultado"
-      if (data.includes("Se encontro") && data.includes("DNI :")) {
-        return procesarRespuestaDNI(data);
-      }
-      
-      // Para respuestas de venezolanos
-      if (data.includes("VENEZOLANOS") || endpointType === 'venezolanos') {
-        return procesarRespuestaVenezolanos(data);
-      }
-      
-      // Para respuestas de cédula
-      if (data.includes("CÉDULA") || endpointType === 'cedula') {
-        return procesarRespuestaCedula(data);
-      }
-    }
-    
-    return data;
-  } catch (error) {
-    console.error("Error procesando respuesta especial:", error);
-    return data; // Devolver original si hay error
-  }
-};
-
-/**
- * Procesa respuestas de DNI por nombres (formato específico)
- * @param {string} texto - Texto crudo de la respuesta
- * @returns {Array} Array de objetos JSON estructurados
- */
-const procesarRespuestaDNI = (texto) => {
-  // Eliminar la parte innecesaria desde "↞ Puedes visualizar"
-  const partes = texto.split("↞ Puedes visualizar");
-  const parteUtil = partes[0].trim();
-  
-  // Extraer el número de resultados
-  const matchResultados = parteUtil.match(/Se encontro (\d+) resultado/);
-  const numResultados = matchResultados ? parseInt(matchResultados[1]) : 0;
-  
-  if (numResultados === 0) {
-    return [];
-  }
-  
-  // Separar por bloques de datos (cada bloque empieza con "DNI :")
-  const bloquesTexto = parteUtil.split(/\nDNI :/).filter(bloque => bloque.trim() !== '');
-  
-  const resultados = [];
-  
-  for (let i = 0; i < bloquesTexto.length; i++) {
-    let bloque = bloquesTexto[i];
-    if (i === 0) {
-      // El primer bloque tiene el texto "Se encontro X resultado." antes del primer DNI
-      bloque = bloque.replace(/Se encontro \d+ resultado\.?\n?/, '');
-    }
-    
-    // Reconstruir la línea DNI
-    bloque = `DNI :${bloque}`;
-    
-    const lineas = bloque.split('\n').filter(linea => linea.trim() !== '');
-    const persona = {};
-    
-    for (const linea of lineas) {
-      if (linea.includes(' : ')) {
-        const [clave, ...valorPartes] = linea.split(' : ');
-        const valor = valorPartes.join(' : ').trim();
-        
-        // Convertir claves a formato JSON estándar
-        let claveJson = clave.trim().toLowerCase();
-        if (claveJson === 'dni') {
-          persona['dni'] = valor;
-        } else if (claveJson === 'apellidos') {
-          persona['apellidos'] = valor;
-        } else if (claveJson === 'nombres') {
-          persona['nombres'] = valor;
-        } else if (claveJson === 'edad') {
-          persona['edad'] = valor;
-        } else {
-          // Para otras claves, usar nombre en minúsculas sin espacios
-          persona[claveJson.replace(/\s+/g, '_')] = valor;
-        }
-      }
-    }
-    
-    if (Object.keys(persona).length > 0) {
-      resultados.push(persona);
-    }
-  }
-  
-  return resultados.length === 1 ? resultados[0] : resultados;
-};
-
-/**
- * Procesa respuestas de venezolanos por nombres
- * @param {string} texto - Texto crudo de la respuesta
- * @returns {Array} Array de objetos JSON estructurados
- */
-const procesarRespuestaVenezolanos = (texto) => {
-  // Eliminar partes innecesarias similares
-  const partes = texto.split(/↞ Puedes visualizar|Credits :|Wanted for :/);
-  const parteUtil = partes[0].trim();
-  
-  // Buscar patrones de datos
-  const lineas = parteUtil.split('\n').filter(linea => linea.trim() !== '');
-  const resultados = [];
-  let personaActual = {};
-  
-  for (const linea of lineas) {
-    if (linea.includes(' : ')) {
-      const [clave, ...valorPartes] = linea.split(' : ');
-      const valor = valorPartes.join(' : ').trim();
-      const claveJson = clave.trim().toLowerCase();
-      
-      personaActual[claveJson.replace(/\s+/g, '_')] = valor;
-    } else if (Object.keys(personaActual).length > 0 && linea.trim()) {
-      // Si la línea no tiene ":" pero ya tenemos datos, podría ser el inicio de una nueva persona
-      resultados.push(personaActual);
-      personaActual = {};
-    }
-  }
-  
-  // Agregar la última persona si existe
-  if (Object.keys(personaActual).length > 0) {
-    resultados.push(personaActual);
-  }
-  
-  return resultados.length === 1 ? resultados[0] : resultados;
-};
-
-/**
- * Procesa respuestas de cédula venezolana
- * @param {string} texto - Texto crudo de la respuesta
- * @returns {Object} Objeto JSON estructurado
- */
-const procesarRespuestaCedula = (texto) => {
-  // Eliminar partes innecesarias
-  const partes = texto.split(/↞ Puedes visualizar|Credits :|Wanted for :/);
-  const parteUtil = partes[0].trim();
-  
-  const lineas = parteUtil.split('\n').filter(linea => linea.trim() !== '');
-  const resultado = {};
-  
-  for (const linea of lineas) {
-    if (linea.includes(' : ')) {
-      const [clave, ...valorPartes] = linea.split(' : ');
-      const valor = valorPartes.join(' : ').trim();
-      const claveJson = clave.trim().toLowerCase().replace(/\s+/g, '_');
-      
-      resultado[claveJson] = valor;
-    }
-  }
-  
-  return resultado;
-};
-
 // -------------------- FIREBASE --------------------
 const serviceAccount = {
   type: process.env.FIREBASE_TYPE,
@@ -227,6 +59,79 @@ if (!admin.apps.length) {
 }
 
 const db = admin.firestore();
+
+// -------------------- FUNCIONES DE LIMPIEZA DE RESPUESTAS --------------------
+
+/**
+ * Función para limpiar y transformar respuestas de APIs de DNI y Cédula
+ * Elimina información innecesaria y convierte el texto en JSON estructurado
+ */
+const limpiarRespuestaEspecial = (data) => {
+  if (!data || typeof data !== 'object') return data;
+  
+  // Si no tiene el campo "message" o "status", retornar sin procesar
+  if (!data.message || data.status !== "success") {
+    return data;
+  }
+  
+  let mensaje = data.message;
+  
+  // 🔹 PASO 1: Eliminar información innecesaria
+  // Eliminar todo desde "↞" hasta el final (incluyendo Credits, Wanted for, etc.)
+  const indiceLimpieza = mensaje.indexOf("↞");
+  if (indiceLimpieza !== -1) {
+    mensaje = mensaje.substring(0, indiceLimpieza).trim();
+  }
+  
+  // 🔹 PASO 2: Detectar si hay múltiples resultados
+  const bloques = mensaje.split(/Se encontr[oó] \d+ resultados?\./).filter(bloque => bloque.trim());
+  
+  // Si solo hay un resultado
+  if (bloques.length <= 1) {
+    const resultado = parsearBloqueResultado(mensaje);
+    return resultado ? { resultado } : data;
+  }
+  
+  // 🔹 PASO 3: Procesar múltiples resultados
+  const resultados = [];
+  for (const bloque of bloques) {
+    const resultado = parsearBloqueResultado(bloque);
+    if (resultado) {
+      resultados.push(resultado);
+    }
+  }
+  
+  return resultados.length > 0 ? { resultados } : data;
+};
+
+/**
+ * Parsea un bloque de texto y lo convierte en un objeto JSON limpio
+ */
+const parsearBloqueResultado = (texto) => {
+  if (!texto || typeof texto !== 'string') return null;
+  
+  const lineas = texto.split('\n').map(l => l.trim()).filter(l => l);
+  const resultado = {};
+  
+  for (const linea of lineas) {
+    // Buscar líneas con formato "CLAVE : VALOR"
+    const match = linea.match(/^([A-ZÁÉÍÓÚÑa-záéíóúñ\s]+)\s*:\s*(.+)$/);
+    if (match) {
+      let clave = match[1].trim().toLowerCase();
+      let valor = match[2].trim();
+      
+      // Normalizar claves comunes
+      clave = clave
+        .replace(/\s+/g, '_')
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, ""); // Eliminar tildes
+      
+      resultado[clave] = valor;
+    }
+  }
+  
+  return Object.keys(resultado).length > 0 ? resultado : null;
+};
 
 // -------------------- MIDDLEWARE DE AUTENTICACIÓN --------------------
 const authMiddleware = async (req, res, next) => {
@@ -334,7 +239,7 @@ const creditosMiddleware = (costo) => {
 // -------------------- FUNCIONES DE APOYO --------------------
 const generateMetaData = () => {
   return {
-    version: "3.0.0", // Actualizado a v3
+    version: "3.0.0",
     timestamp: new Date().toISOString(),
     request_id: `req_${Math.random().toString(36).substring(2, 15)}`,
     server: "cluster-aws-pe-secure-01"
@@ -384,7 +289,6 @@ const deducirCreditosFirebase = async (req, costo) => {
 
 const guardarLogExterno = async (logData) => {
   const horaConsulta = new Date(logData.timestamp).toISOString();
-  // Nota: Incluso si guardamos el log por GET, tus endpoints principales ahora son solo POST.
   const url = `${LOG_GUARDADO_BASE_URL}/log_consulta?host=${encodeURIComponent(logData.domain)}&hora=${encodeURIComponent(horaConsulta)}&endpoint=${encodeURIComponent(logData.endpoint)}&userId=${encodeURIComponent(logData.userId)}&costo=${logData.cost}`;
   
   try {
@@ -436,8 +340,7 @@ const formatoRespuestaEstandar = (success, data, user, metadata = null) => {
   };
 };
 
-// MODIFICACIÓN: Función mejorada para consumir API con procesamiento especial
-const consumirAPIProveedor = async (req, res, url, costo, endpointType = null) => {
+const consumirAPIProveedor = async (req, res, url, costo, aplicarLimpiezaEspecial = false) => {
   try {
     const response = await axios.get(url);
     
@@ -451,25 +354,13 @@ const consumirAPIProveedor = async (req, res, url, costo, endpointType = null) =
       };
       guardarLogExterno(logData);
       
-      // MODIFICACIÓN: Procesar respuesta si es de los endpoints especiales
-      let datosProcesados = response.data;
-      
-      // Solo procesar si es de los endpoints que necesitan transformación
-      if (endpointType || 
-          url.includes('/dni_nombres') || 
-          url.includes('/venezolanos_nombres') || 
-          url.includes('/cedula')) {
-        
-        // Determinar el tipo de endpoint si no se especificó
-        const tipo = endpointType || 
-                    (url.includes('/dni_nombres') ? 'dni_nombres' : 
-                     url.includes('/venezolanos_nombres') ? 'venezolanos' : 
-                     url.includes('/cedula') ? 'cedula' : null);
-        
-        datosProcesados = procesarRespuestaEspecial(response.data, tipo);
+      // 🔹 APLICAR LIMPIEZA ESPECIAL si está activada
+      let dataFinal = response.data;
+      if (aplicarLimpiezaEspecial) {
+        dataFinal = limpiarRespuestaEspecial(response.data);
       }
       
-      return res.json(formatoRespuestaEstandar(true, datosProcesados, req.user));
+      return res.json(formatoRespuestaEstandar(true, dataFinal, req.user));
     } else {
       return res.status(response.status).json(
         formatoRespuestaEstandar(false, response.data, req.user)
@@ -486,7 +377,6 @@ const consumirAPIProveedor = async (req, res, url, costo, endpointType = null) =
 };
 
 // -------------------- RUTAS SEGURAS (SOLO POST) --------------------
-// AHORA TODAS BAJO EL PREFIJO /v3/consulta/
 
 // 1. RENIEC (7 créditos) -> /v3/consulta/dni
 app.post("/v3/consulta/dni", authMiddleware, creditosMiddleware(7), async (req, res) => {
@@ -560,31 +450,34 @@ app.post("/v3/consulta/matrimonios", authMiddleware, creditosMiddleware(6), asyn
   await consumirAPIProveedor(req, res, `${API_URL_MATRIMONIOS}/matrimonios?dni=${dni}`, 6);
 });
 
-// 9. BUSCAR DNI POR NOMBRES (5 créditos) -> /v3/consulta/buscar-dni
+// 🔹 9. BUSCAR DNI POR NOMBRES (5 créditos) -> /v3/consulta/buscar-dni
+// ✅ CON LIMPIEZA ESPECIAL ACTIVADA
 app.post("/v3/consulta/buscar-dni", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { nombres, apepaterno, apematerno } = req.body;
   if (!nombres || !apepaterno || !apematerno) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Nombres y apellidos requeridos en el body" }, req.user));
   }
-  await consumirAPIProveedor(req, res, `${API_URL_DNI_NOMBRES}/dni_nombres?nombres=${nombres}&apepaterno=${apepaterno}&apematerno=${apematerno}`, 5, 'dni_nombres');
+  await consumirAPIProveedor(req, res, `${API_URL_DNI_NOMBRES}/dni_nombres?nombres=${nombres}&apepaterno=${apepaterno}&apematerno=${apematerno}`, 5, true);
 });
 
-// 10. BUSCAR CÉDULA POR NOMBRES (5 créditos) -> /v3/consulta/buscar-cedula
+// 🔹 10. BUSCAR CÉDULA POR NOMBRES (5 créditos) -> /v3/consulta/buscar-cedula
+// ✅ CON LIMPIEZA ESPECIAL ACTIVADA
 app.post("/v3/consulta/buscar-cedula", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { query } = req.body;
   if (!query) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Query requerido en el body" }, req.user));
   }
-  await consumirAPIProveedor(req, res, `${API_URL_VENEZOLANOS}/venezolanos_nombres?query=${encodeURIComponent(query)}`, 5, 'venezolanos');
+  await consumirAPIProveedor(req, res, `${API_URL_VENEZOLANOS}/venezolanos_nombres?query=${encodeURIComponent(query)}`, 5, true);
 });
 
-// 11. CONSULTAR CÉDULA (5 créditos) -> /v3/consulta/cedula
+// 🔹 11. CONSULTAR CÉDULA (5 créditos) -> /v3/consulta/cedula
+// ✅ CON LIMPIEZA ESPECIAL ACTIVADA
 app.post("/v3/consulta/cedula", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { cedula } = req.body;
   if (!cedula) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Cédula requerida en el body" }, req.user));
   }
-  await consumirAPIProveedor(req, res, `${API_URL_CEDULA}/cedula?cedula=${cedula}`, 5, 'cedula');
+  await consumirAPIProveedor(req, res, `${API_URL_CEDULA}/cedula?cedula=${cedula}`, 5, true);
 });
 
 // -------------------- ENDPOINT RAIZ (HEALTH CHECK) --------------------
