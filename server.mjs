@@ -37,10 +37,6 @@ const API_URL_VENEZOLANOS = process.env.API_URL_VENEZOLANOS || "https://bankend-
 const API_URL_CEDULA = process.env.API_URL_CEDULA || "https://bankend-tlgm-2p.fly.dev";
 const LOG_GUARDADO_BASE_URL = process.env.LOG_GUARDADO_URL || "https://base-datos-consulta-pe.fly.dev/guardar";
 
-// 🔹 NUEVAS VARIABLES PARA SUNAT RUC (desde Secrets)
-const URL_SUNAT = process.env.URL_SUNAT;
-const TOKEN_SUNAT = process.env.TOKEN_SUNAT;
-
 // -------------------- FIREBASE --------------------
 const serviceAccount = {
   type: process.env.FIREBASE_TYPE,
@@ -380,50 +376,6 @@ const consumirAPIProveedor = async (req, res, url, costo, aplicarLimpiezaEspecia
   }
 };
 
-// 🔹 FUNCIÓN ESPECIAL PARA SUNAT RUC (con URL y Token desde Secrets)
-const consumirAPISunatRUC = async (req, res, ruc, costo) => {
-  try {
-    // Validar que existan las variables de entorno
-    if (!URL_SUNAT || !TOKEN_SUNAT) {
-      throw new Error("Configuración de SUNAT no disponible. Contacta a soporte.");
-    }
-
-    // Construir la URL con el RUC
-    const url = `${URL_SUNAT}${ruc}`;
-    
-    // Realizar la petición con el token en el header
-    const response = await axios.get(url, {
-      headers: {
-        'Authorization': `Bearer ${TOKEN_SUNAT}`
-      }
-    });
-    
-    if (response.status >= 200 && response.status < 300) {
-      await deducirCreditosFirebase(req, costo);
-      
-      const logData = {
-        userId: req.user.id,
-        timestamp: new Date(),
-        ...req.logData,
-      };
-      guardarLogExterno(logData);
-      
-      return res.json(formatoRespuestaEstandar(true, response.data, req.user));
-    } else {
-      return res.status(response.status).json(
-        formatoRespuestaEstandar(false, response.data, req.user)
-      );
-    }
-  } catch (error) {
-    console.error("Error al consumir API SUNAT:", error.message);
-    
-    const errorData = error.response ? error.response.data : { error: error.message };
-    return res.status(error.response ? error.response.status : 500).json(
-      formatoRespuestaEstandar(false, errorData, req.user)
-    );
-  }
-};
-
 // -------------------- RUTAS SEGURAS (SOLO POST) --------------------
 
 // 1. RENIEC (7 créditos) -> /v3/consulta/dni
@@ -462,14 +414,13 @@ app.post("/v3/consulta/placa", authMiddleware, creditosMiddleware(8), async (req
   await consumirAPIProveedor(req, res, `${API_URL_SUNARP}/vehiculos?placa=${placa}`, 8);
 });
 
-// 🔹 5. SUNAT por RUC (6 créditos) -> /v3/consulta/ruc
-// ✅ AHORA USA URL_SUNAT Y TOKEN_SUNAT DESDE SECRETS
+// 5. SUNAT por RUC (6 créditos) -> /v3/consulta/ruc
 app.post("/v3/consulta/ruc", authMiddleware, creditosMiddleware(6), async (req, res) => {
   const { data } = req.body;
   if (!data) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "RUC requerido en el body" }, req.user));
   }
-  await consumirAPISunatRUC(req, res, data, 6);
+  await consumirAPIProveedor(req, res, `${API_URL_SUNAT}/sunat?data=${data}`, 6);
 });
 
 // 6. SUNAT por Razón Social (5 créditos) -> /v3/consulta/razon-social
