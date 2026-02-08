@@ -26,17 +26,17 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // --- VARIABLES DE ENTORNO PARA PROVEEDORES ---
-const API_URL_RENIEC = process.env.API_URL_RENIEC || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
-const API_URL_TELEFONIA = process.env.API_URL_TELEFONIA || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
-const API_URL_SUNARP = process.env.API_URL_SUNARP || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
-const API_URL_SUNAT = "https://dniruc.apisperu.com/api/v1/ruc/"; // 🔧 CAMBIO REALIZADO: Nueva API de SUNAT
+const API_URL_RENIEC = process.env.API_URL_RENIEC ||;
+const API_URL_TELEFONIA = process.env.API_URL_TELEFONIA ||;
+const API_URL_SUNARP = process.env.API_URL_SUNARP || ;
+const API_URL_SUNAT = "https://dniruc.apisperu.com/api/v1/ruc/"; 
 const TOKEN_SUNAT = process.env.TOKEN_SUNAT; // 🔧 Token desde secrets
-const API_URL_EMPRESAS = process.env.API_URL_EMPRESAS || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
-const API_URL_MATRIMONIOS = process.env.API_URL_MATRIMONIOS || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
-const API_URL_DNI_NOMBRES = process.env.API_URL_DNI_NOMBRES || "https://bankend-tlgm.fly.dev";
-const API_URL_VENEZOLANOS = process.env.API_URL_VENEZOLANOS || "https://bankend-tlgm.fly.dev";
-const API_URL_CEDULA = process.env.API_URL_CEDULA || "https://bankend-tlgm-2p.fly.dev";
-const LOG_GUARDADO_BASE_URL = process.env.LOG_GUARDADO_URL || "https://base-datos-consulta-pe.fly.dev/guardar";
+const API_URL_EMPRESAS = process.env.API_URL_EMPRESAS || "";
+const API_URL_MATRIMONIOS = process.env.API_URL_MATRIMONIOS || "";
+const API_URL_DNI_NOMBRES = process.env.API_URL_DNI_NOMBRES || "";
+const API_URL_VENEZOLANOS = process.env.API_URL_VENEZOLANOS || "";
+const API_URL_CEDULA = process.env.API_URL_CEDULA || "";
+const LOG_GUARDADO_BASE_URL = process.env.LOG_GUARDADO_URL || "";
 
 // -------------------- FIREBASE --------------------
 const serviceAccount = {
