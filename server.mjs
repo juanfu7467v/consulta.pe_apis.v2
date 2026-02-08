@@ -29,7 +29,8 @@ app.use(cors(corsOptions));
 const API_URL_RENIEC = process.env.API_URL_RENIEC || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
 const API_URL_TELEFONIA = process.env.API_URL_TELEFONIA || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
 const API_URL_SUNARP = process.env.API_URL_SUNARP || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
-const API_URL_SUNAT = process.env.API_URL_SUNAT || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
+const API_URL_SUNAT = "https://dniruc.apisperu.com/api/v1/ruc/"; // 🔧 CAMBIO REALIZADO: Nueva API de SUNAT
+const TOKEN_SUNAT = process.env.TOKEN_SUNAT; // 🔧 Token desde secrets
 const API_URL_EMPRESAS = process.env.API_URL_EMPRESAS || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
 const API_URL_MATRIMONIOS = process.env.API_URL_MATRIMONIOS || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
 const API_URL_DNI_NOMBRES = process.env.API_URL_DNI_NOMBRES || "https://bankend-tlgm.fly.dev";
@@ -415,21 +416,30 @@ app.post("/v3/consulta/placa", authMiddleware, creditosMiddleware(8), async (req
 });
 
 // 5. SUNAT por RUC (6 créditos) -> /v3/consulta/ruc
+// 🔧 CAMBIO REALIZADO: Ahora usa la nueva API de apisperu.com con token
 app.post("/v3/consulta/ruc", authMiddleware, creditosMiddleware(6), async (req, res) => {
   const { data } = req.body;
   if (!data) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "RUC requerido en el body" }, req.user));
   }
-  await consumirAPIProveedor(req, res, `${API_URL_SUNAT}/sunat?data=${data}`, 6);
+  
+  // 🔧 Construir la URL con el formato de la nueva API: https://dniruc.apisperu.com/api/v1/ruc/{RUC}?token={TOKEN_SUNAT}
+  const apiUrl = `${API_URL_SUNAT}${data}?token=${TOKEN_SUNAT}`;
+  
+  await consumirAPIProveedor(req, res, apiUrl, 6);
 });
 
 // 6. SUNAT por Razón Social (5 créditos) -> /v3/consulta/razon-social
+// 🔧 CAMBIO REALIZADO: Para búsqueda por razón social, mantenemos el endpoint anterior ya que la nueva API no soporta este tipo de búsqueda
 app.post("/v3/consulta/razon-social", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { data } = req.body;
   if (!data) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Razón social requerida en el body" }, req.user));
   }
-  await consumirAPIProveedor(req, res, `${API_URL_SUNAT}/sunat-razon?data=${data}`, 5);
+  
+  // Para búsqueda por razón social, mantenemos el proveedor anterior
+  const API_URL_SUNAT_RAZON = process.env.API_URL_SUNAT_RAZON || "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
+  await consumirAPIProveedor(req, res, `${API_URL_SUNAT_RAZON}/sunat-razon?data=${data}`, 5);
 });
 
 // 7. Empresas donde figura (4 créditos) -> /v3/consulta/empresas
