@@ -64,88 +64,9 @@ const db = admin.firestore();
 // -------------------- FUNCIONES DE LIMPIEZA DE RESPUESTAS --------------------
 
 /**
- * 🔧 NUEVA FUNCIÓN: Formatear búsqueda de nombres para el endpoint de venezolanos
- * Convierte el texto ingresado al formato /nmv nombres|apellidopaterno|apellidomaterno
- */
-const formatearBusquedaNombres = (query) => {
-  if (!query || typeof query !== 'string') return '';
-  
-  // Limpiar espacios extras y convertir a mayúsculas
-  const queryLimpio = query.trim().replace(/\s+/g, ' ').toUpperCase();
-  const palabras = queryLimpio.split(' ');
-  
-  let nombres = '';
-  let apellidoPaterno = '';
-  let apellidoMaterno = '';
-  
-  if (palabras.length === 2) {
-    // Caso: nombre apellido (solo un apellido)
-    nombres = palabras[0];
-    apellidoPaterno = palabras[1];
-    apellidoMaterno = '';
-  } else if (palabras.length >= 3) {
-    // Caso: nombre1 nombre2 apellido1 apellido2
-    // Los apellidos son las últimas dos palabras
-    const apellidoMaternoIndex = palabras.length - 1;
-    const apellidoPaternoIndex = palabras.length - 2;
-    
-    apellidoMaterno = palabras[apellidoMaternoIndex];
-    apellidoPaterno = palabras[apellidoPaternoIndex];
-    nombres = palabras.slice(0, apellidoPaternoIndex).join(',');
-  } else {
-    // Caso: un solo término
-    nombres = palabras[0];
-    apellidoPaterno = '';
-    apellidoMaterno = '';
-  }
-  
-  // Aplicar reglas de transformación
-  // Si apellido paterno tiene más de 1 palabra, reemplazar espacios con '+'
-  if (apellidoPaterno && apellidoPaterno.includes(' ')) {
-    apellidoPaterno = apellidoPaterno.replace(/ /g, '+');
-  }
-  
-  // Si apellido materno tiene más de 1 palabra, reemplazar espacios con '+'
-  if (apellidoMaterno && apellidoMaterno.includes(' ')) {
-    apellidoMaterno = apellidoMaterno.replace(/ /g, '+');
-  }
-  
-  // Construir el formato /nmv nombres|apellidopaterno|apellidomaterno
-  return `${nombres}|${apellidoPaterno}|${apellidoMaterno}`;
-};
-
-/**
- * 🔧 FUNCIÓN MEJORADA: Parsear múltiples resultados desde el texto
- */
-const parsearBloqueResultado = (texto) => {
-  if (!texto || typeof texto !== 'string') return null;
-  
-  const lineas = texto.split('\n').map(l => l.trim()).filter(l => l);
-  const resultado = {};
-  
-  for (const linea of lineas) {
-    // Buscar líneas con formato "CLAVE : VALOR"
-    const match = linea.match(/^([A-ZÁÉÍÓÚÑa-záéíóúñ\s]+)\s*:\s*(.+)$/);
-    if (match) {
-      let clave = match[1].trim().toLowerCase();
-      let valor = match[2].trim();
-      
-      // Normalizar claves comunes
-      clave = clave
-        .replace(/\s+/g, '_')
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, ""); // Eliminar tildes
-      
-      resultado[clave] = valor;
-    }
-  }
-  
-  return Object.keys(resultado).length > 0 ? resultado : null;
-};
-
-/**
- * 🔧 FUNCIÓN MEJORADA: Limpiar y transformar respuestas de APIs de DNI y Cédula
- * Ahora procesa correctamente múltiples resultados y los devuelve como array JSON
+ * Función mejorada para limpiar y transformar respuestas de APIs de DNI y Cédula
+ * Ahora procesa TODOS los resultados sin eliminar ninguno
+ * Convierte el texto plano en un array JSON estructurado
  */
 const limpiarRespuestaEspecial = (data) => {
   if (!data || typeof data !== 'object') return data;
@@ -157,49 +78,161 @@ const limpiarRespuestaEspecial = (data) => {
   
   let mensaje = data.message;
   
-  // 🔹 PASO 1: Eliminar información innecesaria
+  // 🔹 PASO 1: Eliminar información innecesaria del final
   // Eliminar todo desde "↞" hasta el final (incluyendo Credits, Wanted for, etc.)
   const indiceLimpieza = mensaje.indexOf("↞");
   if (indiceLimpieza !== -1) {
     mensaje = mensaje.substring(0, indiceLimpieza).trim();
   }
   
-  // 🔹 PASO 2: Extraer el número total de resultados si existe
-  const totalMatch = mensaje.match(/Se encontr[oó]\s*(\d+)\s*resultados?\.?/i);
-  const totalResultados = totalMatch ? parseInt(totalMatch[1]) : null;
+  // 🔹 PASO 2: Extraer el texto completo de resultados
+  // Buscar el patrón "Se encontr[oó] X resultados." para obtener el bloque completo
+  const resultadosCompletos = mensaje;
   
-  // 🔹 PASO 3: Separar el mensaje en bloques por resultado
-  // Patrón: DNI : XXXXXXXX - Y seguido de saltos de línea
-  const bloques = mensaje.split(/(?=DNI\s*:\s*\d+\s*-\s*\d+)/g).filter(bloque => bloque.trim().length > 0);
+  // 🔹 PASO 3: Dividir por bloques de cada persona usando el patrón "DNI :"
+  // Cada bloque comienza con "DNI :" seguido del número y un guión
+  const bloques = resultadosCompletos.split(/(?=DNI\s*:\s*\d+\s*-\s*\d+)/g).filter(bloque => bloque.trim().length > 0);
   
-  // 🔹 PASO 4: Procesar cada bloque y convertirlo en objeto JSON
+  // 🔹 PASO 4: Procesar cada bloque individualmente
   const resultados = [];
+  
   for (const bloque of bloques) {
-    const resultado = parsearBloqueResultado(bloque);
-    if (resultado && Object.keys(resultado).length > 0) {
-      resultados.push(resultado);
+    const persona = parsearBloquePersona(bloque);
+    if (persona && Object.keys(persona).length > 0) {
+      resultados.push(persona);
     }
   }
   
-  // 🔹 PASO 5: Si no se encontraron resultados con el patrón, intentar procesar el mensaje completo
-  if (resultados.length === 0 && mensaje.trim()) {
-    const resultadoUnico = parsearBloqueResultado(mensaje);
-    if (resultadoUnico) {
-      resultados.push(resultadoUnico);
+  // 🔹 PASO 5: Si no se encontraron bloques con el patrón, intentar parsear todo el mensaje
+  if (resultados.length === 0) {
+    const personaUnica = parsearBloquePersona(mensaje);
+    if (personaUnica && Object.keys(personaUnica).length > 0) {
+      return { resultados: [personaUnica] };
+    }
+    return data;
+  }
+  
+  // 🔹 PASO 6: Retornar todos los resultados encontrados
+  return { 
+    resultados: resultados,
+    total_encontrado: resultados.length,
+    mensaje_original: `Se encontraron ${resultados.length} resultados`
+  };
+};
+
+/**
+ * Parsea un bloque de texto de una persona y lo convierte en un objeto JSON limpio
+ * Ahora extrae TODOS los campos disponibles sin perder información
+ */
+const parsearBloquePersona = (texto) => {
+  if (!texto || typeof texto !== 'string') return null;
+  
+  const lineas = texto.split('\n').map(l => l.trim()).filter(l => l && l.length > 0);
+  const persona = {};
+  
+  // Mapeo de claves normalizadas
+  const mapeoClaves = {
+    'dni': 'dni',
+    'cedula': 'dni',
+    'apellidos': 'apellidos',
+    'nombres': 'nombres',
+    'nombre': 'nombres',
+    'edad': 'edad',
+    'fecha_nacimiento': 'fecha_nacimiento',
+    'genero': 'genero',
+    'sexo': 'genero',
+    'estado_civil': 'estado_civil',
+    'direccion': 'direccion',
+    'telefono': 'telefono',
+    'profesion': 'profesion'
+  };
+  
+  for (const linea of lineas) {
+    // Buscar líneas con formato "CLAVE : VALOR" o "CLAVE: VALOR"
+    const match = linea.match(/^([A-ZÁÉÍÓÚÑa-záéíóúñ\s]+)\s*:\s*(.+)$/);
+    if (match) {
+      let clave = match[1].trim().toLowerCase();
+      const valor = match[2].trim();
+      
+      // Eliminar números al final de la clave (ej: "DNI - 1" -> "dni")
+      clave = clave.replace(/\s*-\s*\d+$/, '').trim();
+      
+      // Normalizar la clave
+      clave = clave
+        .replace(/\s+/g, '_')
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, ""); // Eliminar tildes
+      
+      // Usar el mapeo de claves si existe
+      const claveNormalizada = mapeoClaves[clave] || clave;
+      
+      // Solo agregar si no existe ya (evitar duplicados)
+      if (!persona[claveNormalizada]) {
+        persona[claveNormalizada] = valor;
+      }
     }
   }
   
-  // 🔹 PASO 6: Estructurar la respuesta final
-  if (resultados.length > 0) {
-    return {
-      resultados,
-      total_encontrados: resultados.length,
-      mensaje_original: totalResultados ? `Se encontraron ${totalResultados} resultados` : undefined
-    };
+  return Object.keys(persona).length > 0 ? persona : null;
+};
+
+/**
+ * Función para formatear la búsqueda de nombres según las reglas especificadas
+ * Convierte "juan perez lopez" en "juan|perez|lopez"
+ * Convierte "juan manuel perez lopez" en "juan,manuel|perez|lopez"
+ * Convierte "juan del sol lopez" en "juan|del+sol|lopez"
+ */
+const formatearBusquedaNombres = (query) => {
+  if (!query || typeof query !== 'string') return query;
+  
+  // Dividir la consulta en palabras
+  const palabras = query.trim().toLowerCase().split(/\s+/).filter(p => p.length > 0);
+  
+  if (palabras.length === 0) return query;
+  
+  // Caso: solo un término (ej: "juan")
+  if (palabras.length === 1) {
+    return `${palabras[0]}||`;
   }
   
-  // Si no se pudo parsear nada, devolver los datos originales
-  return data;
+  // Caso: dos términos (ej: "juan perez")
+  if (palabras.length === 2) {
+    return `${palabras[0]}|${palabras[1]}|`;
+  }
+  
+  // Caso: tres o más términos
+  // Identificar posibles apellidos compuestos
+  let nombres = [];
+  let apellidoPaterno = '';
+  let apellidoMaterno = '';
+  
+  // Buscar palabras que podrían ser parte de apellidos compuestos
+  // Palabras comunes que indican apellidos compuestos: del, de, la, las, los, san, santa
+  const preposiciones = ['del', 'de', 'la', 'las', 'los', 'san', 'santa'];
+  
+  // Estrategia: los últimos 2 términos son los apellidos (a menos que haya preposiciones)
+  let indiceApellidoPaterno = palabras.length - 2;
+  let indiceApellidoMaterno = palabras.length - 1;
+  
+  // Verificar si el penúltimo término es una preposición (ej: "del")
+  if (indiceApellidoPaterno > 0 && preposiciones.includes(palabras[indiceApellidoPaterno - 1])) {
+    // El apellido paterno incluye la preposición
+    apellidoPaterno = palabras.slice(indiceApellidoPaterno - 1, indiceApellidoPaterno + 1).join('+');
+    nombres = palabras.slice(0, indiceApellidoPaterno - 1);
+  } else {
+    apellidoPaterno = palabras[indiceApellidoPaterno];
+    nombres = palabras.slice(0, indiceApellidoPaterno);
+  }
+  
+  apellidoMaterno = palabras[indiceApellidoMaterno];
+  
+  // Formatear nombres: si hay más de un nombre, unir con coma
+  const nombresFormateados = nombres.join(',');
+  
+  // Formatear apellidos: si tienen espacios, reemplazar con '+'
+  // Esto ya se maneja arriba para apellidos compuestos
+  
+  return `${nombresFormateados}|${apellidoPaterno}|${apellidoMaterno}`;
 };
 
 // -------------------- MIDDLEWARE DE AUTENTICACIÓN --------------------
@@ -539,20 +572,18 @@ app.post("/v3/consulta/buscar-dni", authMiddleware, creditosMiddleware(5), async
 });
 
 // 🔹 10. BUSCAR CÉDULA POR NOMBRES (5 créditos) -> /v3/consulta/buscar-cedula
-// ✅ CORREGIDO: Ahora usa el formato /nmv correctamente
+// ✅ CON LIMPIEZA ESPECIAL ACTIVADA Y FORMATEO DE BÚSQUEDA
 app.post("/v3/consulta/buscar-cedula", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { query } = req.body;
   if (!query) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Query requerido en el body" }, req.user));
   }
-  
-  // 🔧 Transformar el query al formato nmv correcto
+
+  // 🔧 APLICAR FORMATEO DE BÚSQUEDA SEGÚN LAS REGLAS ESPECIFICADAS
   const queryFormateado = formatearBusquedaNombres(query);
   
-  // 🔧 Construir la URL con el formato correcto /nmv
-  const apiUrl = `${API_URL_VENEZOLANOS}/nmv ${encodeURIComponent(queryFormateado)}`;
-  
-  await consumirAPIProveedor(req, res, apiUrl, 5, true);
+  // Mantener la URL original pero con el query formateado
+  await consumirAPIProveedor(req, res, `${API_URL_VENEZOLANOS}/venezolanos_nombres?query=${encodeURIComponent(queryFormateado)}`, 5, true);
 });
 
 // 🔹 11. CONSULTAR CÉDULA (5 créditos) -> /v3/consulta/cedula
