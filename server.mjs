@@ -26,9 +26,9 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // --- VARIABLES DE ENTORNO PARA PROVEEDORES ---
-const API_URL_RENIEC = process.env.API_URL_RENIEC ||;
-const API_URL_TELEFONIA = process.env.API_URL_TELEFONIA ||;
-const API_URL_SUNARP = process.env.API_URL_SUNARP || ;
+const API_URL_RENIEC = process.env.API_URL_RENIEC;
+const API_URL_TELEFONIA = process.env.API_URL_TELEFONIA;
+const API_URL_SUNARP = process.env.API_URL_SUNARP;
 const API_URL_SUNAT = "https://dniruc.apisperu.com/api/v1/ruc/"; 
 const TOKEN_SUNAT = process.env.TOKEN_SUNAT; // 🔧 Token desde secrets
 const API_URL_EMPRESAS = process.env.API_URL_EMPRESAS || "";
@@ -64,8 +64,64 @@ const db = admin.firestore();
 // -------------------- FUNCIONES DE LIMPIEZA DE RESPUESTAS --------------------
 
 /**
- * Función para limpiar y transformar respuestas de APIs de DNI y Cédula
- * Elimina información innecesaria y convierte el texto en JSON estructurado
+ * 🔧 NUEVA FUNCIÓN: Formatear búsqueda de nombres para API de venezolanos
+ * Convierte el texto plano al formato /nmv nombres|apellidopaterno|apellidomaterno
+ */
+const formatearBusquedaNombres = (query) => {
+  if (!query || typeof query !== 'string') return '';
+  
+  // Limpiar el texto: eliminar espacios extras y convertir a mayúsculas
+  const queryLimpio = query.trim().replace(/\s+/g, ' ').toUpperCase();
+  const palabras = queryLimpio.split(' ');
+  
+  let nombres = '';
+  let apellidoPaterno = '';
+  let apellidoMaterno = '';
+  
+  if (palabras.length === 1) {
+    // Solo un término: se asume que es el nombre
+    nombres = palabras[0];
+    apellidoPaterno = '';
+    apellidoMaterno = '';
+  } else if (palabras.length === 2) {
+    // Dos términos: nombre y apellido paterno
+    nombres = palabras[0];
+    apellidoPaterno = palabras[1];
+    apellidoMaterno = '';
+  } else if (palabras.length === 3) {
+    // Tres términos: nombre, apellido paterno, apellido materno
+    nombres = palabras[0];
+    apellidoPaterno = palabras[1];
+    apellidoMaterno = palabras[2];
+  } else {
+    // Cuatro o más términos: se asume que los primeros son nombres y los últimos dos son apellidos
+    // Ejemplo: "JUAN MANUEL PEREZ LOPEZ" -> nombres = "JUAN,MANUEL", apellidoPaterno = "PEREZ", apellidoMaterno = "LOPEZ"
+    const apellidoMaternoIndex = palabras.length - 1;
+    const apellidoPaternoIndex = palabras.length - 2;
+    
+    apellidoMaterno = palabras[apellidoMaternoIndex];
+    apellidoPaterno = palabras[apellidoPaternoIndex];
+    nombres = palabras.slice(0, apellidoPaternoIndex).join(',');
+  }
+  
+  // Aplicar reglas de transformación
+  // Si apellido paterno tiene más de 1 palabra (contiene espacios internos)
+  if (apellidoPaterno && apellidoPaterno.includes(' ')) {
+    apellidoPaterno = apellidoPaterno.replace(/ /g, '+');
+  }
+  
+  // Si apellido materno tiene más de 1 palabra
+  if (apellidoMaterno && apellidoMaterno.includes(' ')) {
+    apellidoMaterno = apellidoMaterno.replace(/ /g, '+');
+  }
+  
+  // Construir el formato /nmv nombres|apellidopaterno|apellidomaterno
+  return `/nmv ${nombres}|${apellidoPaterno}|${apellidoMaterno}`;
+};
+
+/**
+ * 🔧 FUNCIÓN MEJORADA: Limpiar y transformar respuestas de APIs de DNI y Cédula
+ * Ahora convierte TODOS los resultados a JSON estructurado
  */
 const limpiarRespuestaEspecial = (data) => {
   if (!data || typeof data !== 'object') return data;
@@ -84,29 +140,29 @@ const limpiarRespuestaEspecial = (data) => {
     mensaje = mensaje.substring(0, indiceLimpieza).trim();
   }
   
-  // 🔹 PASO 2: Detectar si hay múltiples resultados
-  const bloques = mensaje.split(/Se encontr[oó] \d+ resultados?\./).filter(bloque => bloque.trim());
+  // 🔹 PASO 2: Detectar si hay múltiples resultados usando patrón DNI : XXXXX - N
+  const bloques = mensaje.split(/(?=DNI\s*:\s*\d+\s*-\s*\d+)/g).filter(bloque => bloque.trim());
   
-  // Si solo hay un resultado
-  if (bloques.length <= 1) {
-    const resultado = parsearBloqueResultado(mensaje);
-    return resultado ? { resultado } : data;
-  }
-  
-  // 🔹 PASO 3: Procesar múltiples resultados
+  // 🔹 PASO 3: Procesar cada bloque y convertirlo a JSON
   const resultados = [];
   for (const bloque of bloques) {
     const resultado = parsearBloqueResultado(bloque);
-    if (resultado) {
+    if (resultado && Object.keys(resultado).length > 0) {
       resultados.push(resultado);
     }
   }
   
-  return resultados.length > 0 ? { resultados } : data;
+  // Si se encontraron resultados, devolver el array completo
+  if (resultados.length > 0) {
+    return { resultados };
+  }
+  
+  // Si no se pudo parsear, devolver el mensaje original
+  return data;
 };
 
 /**
- * Parsea un bloque de texto y lo convierte en un objeto JSON limpio
+ * 🔧 FUNCIÓN MEJORADA: Parsea un bloque de texto y lo convierte en un objeto JSON limpio
  */
 const parsearBloqueResultado = (texto) => {
   if (!texto || typeof texto !== 'string') return null;
@@ -118,14 +174,16 @@ const parsearBloqueResultado = (texto) => {
     // Buscar líneas con formato "CLAVE : VALOR"
     const match = linea.match(/^([A-ZÁÉÍÓÚÑa-záéíóúñ\s]+)\s*:\s*(.+)$/);
     if (match) {
-      let clave = match[1].trim().toLowerCase();
+      let clave = match[1].trim();
       let valor = match[2].trim();
       
-      // Normalizar claves comunes
-      clave = clave
-        .replace(/\s+/g, '_')
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, ""); // Eliminar tildes
+      // Normalizar claves comunes (eliminar números al final como "- 1", "- 2", etc.)
+      clave = clave.replace(/\s*-\s*\d+$/, '').trim();
+      
+      // Eliminar la edad entre paréntesis de la fecha de nacimiento
+      if (clave === 'FECHA NACIMIENTO' && valor.includes('(')) {
+        valor = valor.substring(0, valor.lastIndexOf('(')).trim();
+      }
       
       resultado[clave] = valor;
     }
@@ -471,13 +529,18 @@ app.post("/v3/consulta/buscar-dni", authMiddleware, creditosMiddleware(5), async
 });
 
 // 🔹 10. BUSCAR CÉDULA POR NOMBRES (5 créditos) -> /v3/consulta/buscar-cedula
-// ✅ CON LIMPIEZA ESPECIAL ACTIVADA
+// ✅ CON LIMPIEZA ESPECIAL ACTIVADA Y FORMATO CORREGIDO
 app.post("/v3/consulta/buscar-cedula", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { query } = req.body;
   if (!query) {
     return res.status(400).json(formatoRespuestaEstandar(false, { error: "Query requerido en el body" }, req.user));
   }
-  await consumirAPIProveedor(req, res, `${API_URL_VENEZOLANOS}/venezolanos_nombres?query=${encodeURIComponent(query)}`, 5, true);
+
+  // 🔧 Transformar el query al formato nmv correcto
+  const queryFormateado = formatearBusquedaNombres(query);
+  
+  // 🔧 Usar el formato /nmv en lugar de query= directo
+  await consumirAPIProveedor(req, res, `${API_URL_VENEZOLANOS}${encodeURIComponent(queryFormateado)}`, 5, true);
 });
 
 // 🔹 11. CONSULTAR CÉDULA (5 créditos) -> /v3/consulta/cedula
