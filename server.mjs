@@ -123,6 +123,7 @@ const limpiarRespuestaEspecial = (data) => {
 /**
  * Parsea un bloque de texto de una persona y lo convierte en un objeto JSON limpio
  * Ahora extrae TODOS los campos disponibles sin perder información
+ * Y elimina específicamente los campos 'credits' y 'wanted_for'
  */
 const parsearBloquePersona = (texto) => {
   if (!texto || typeof texto !== 'string') return null;
@@ -144,7 +145,10 @@ const parsearBloquePersona = (texto) => {
     'estado_civil': 'estado_civil',
     'direccion': 'direccion',
     'telefono': 'telefono',
-    'profesion': 'profesion'
+    'profesion': 'profesion',
+    'centro': 'centro',
+    'institucion': 'institucion',
+    'colegio': 'centro'
   };
   
   for (const linea of lineas) {
@@ -156,6 +160,12 @@ const parsearBloquePersona = (texto) => {
       
       // Eliminar números al final de la clave (ej: "DNI - 1" -> "dni")
       clave = clave.replace(/\s*-\s*\d+$/, '').trim();
+      
+      // 🔧 CORRECCIÓN: No procesar los campos 'credits' ni 'wanted_for'
+      const claveLower = clave.toLowerCase();
+      if (claveLower.includes('credits') || claveLower.includes('wanted')) {
+        continue; // Saltar estos campos completamente
+      }
       
       // Normalizar la clave
       clave = clave
