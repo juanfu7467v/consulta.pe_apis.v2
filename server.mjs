@@ -11,35 +11,27 @@ const app = express();
 app.set("trust proxy", true);
 
 // 🟢 MIDDLEWARE DE SEGURIDAD Y PARSEO
-// Límite de tamaño para evitar ataques de desbordamiento en el body
 app.use(express.json({ limit: "100kb" }));
 app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 
 // 🟢 Configuración de CORS
-// Nota: Para máxima seguridad, en producción deberías cambiar origin: "*"
-// por el dominio específico de tu frontend (ej: "https://miweb.com").
 const corsOptions = {
   origin: "*",
-  methods: "POST,OPTIONS", // Solo permitimos POST y OPTIONS (preflight)
+  methods: "POST,OPTIONS",
   allowedHeaders: ["Content-Type", "x-api-key", "x-admin-key"],
   exposedHeaders: ["x-api-key", "x-admin-key"],
   credentials: true,
 };
 app.use(cors(corsOptions));
 
-// -------------------- CONTEXTO DE REQUEST --------------------
-app.use((req, res, next) => {
-  req.requestMeta = generateMetaData();
-  req.clientIp = getClientIp(req);
-  next();
-});
-
-// --- VARIABLES DE ENTORNO PARA PROVEEDORES ---
-const API_URL_RENIEC = process.env.API_URL_RENIEC;
-const API_URL_TELEFONIA = process.env.API_URL_TELEFONIA;
-const API_URL_SUNARP = process.env.API_URL_SUNARP;
+// -----------------------------------------------------------------------------
+// VARIABLES DE ENTORNO PARA PROVEEDORES
+// -----------------------------------------------------------------------------
+const API_URL_RENIEC = process.env.API_URL_RENIEC || "";
+const API_URL_TELEFONIA = process.env.API_URL_TELEFONIA || "";
+const API_URL_SUNARP = process.env.API_URL_SUNARP || "";
 const API_URL_SUNAT = "https://dniruc.apisperu.com/api/v1/ruc/";
-const TOKEN_SUNAT = process.env.TOKEN_SUNAT;
+const TOKEN_SUNAT = process.env.TOKEN_SUNAT || "";
 const API_URL_EMPRESAS = process.env.API_URL_EMPRESAS || "";
 const API_URL_MATRIMONIOS = process.env.API_URL_MATRIMONIOS || "";
 const API_URL_DNI_NOMBRES = process.env.API_URL_DNI_NOMBRES || "";
@@ -47,331 +39,9 @@ const API_URL_VENEZOLANOS = process.env.API_URL_VENEZOLANOS || "";
 const API_URL_CEDULA = process.env.API_URL_CEDULA || "";
 const LOG_GUARDADO_BASE_URL = process.env.LOG_GUARDADO_URL || "";
 
-// -------------------- GOOGLE SHEETS AUDITORÍA --------------------
-const GOOGLE_SHEETS_CREDENTIALS = {
-  type: process.env.TYPE_GOOGLE_SHET,
-  project_id: process.env.PROJECT_ID_GOOGLE_SHET,
-  private_key_id: process.env.PRIVATE_KEY_ID_GOOGLE_SHET,
-  private_key: process.env.PRIVATE_KEY_GOOGLE_SHET?.replace(/\\n/g, "\n"),
-  client_email: process.env.CLIENT_EMAIL_GOOGLE_SHET,
-  client_id: process.env.CLIENT_ID_GOOGLE_SHET,
-  auth_uri: process.env.AUTH_URI_GOOGLE_SHET,
-  token_uri: process.env.TOKEN_URI_GOOGLE_SHET,
-  auth_provider_x509_cert_url: process.env.AUTH_PROVIDER_X509_CERT_URL_GOOGLE_SHET,
-  client_x509_cert_url: process.env.CLIENT_X509_CERT_URL_GOOGLE_SHET,
-  universe_domain: process.env.UNIVERSE_DOMAIN_GOOGLE_SHET,
-};
-
-const GOOGLE_SPREADSHEET_ID = process.env.ID_DE_HOJA_CALCULO_GOOGLE_SHET;
-const AUDIT_TIMEZONE = process.env.AUDIT_TIMEZONE || "America/Lima";
-
-let googleSheetsService = null;
-let auditSheetNameCache = null;
-
-const ENDPOINT_AUDIT_CONFIG = {
-  "/v3/consulta/dni": {
-    tipoConsulta: "RENIEC",
-    getInput: (body) => body?.dni ?? "",
-  },
-  "/v3/consulta/telefonia-doc": {
-    tipoConsulta: "Telefonía",
-    getInput: (body) => body?.documento ?? "",
-  },
-  "/v3/consulta/telefonia-num": {
-    tipoConsulta: "Telefonía",
-    getInput: (body) => body?.numero ?? "",
-  },
-  "/v3/consulta/placa": {
-    tipoConsulta: "SUNARP",
-    getInput: (body) => body?.placa ?? "",
-  },
-  "/v3/consulta/ruc": {
-    tipoConsulta: "SUNAT",
-    getInput: (body) => body?.data ?? "",
-  },
-  "/v3/consulta/razon-social": {
-    tipoConsulta: "SUNAT",
-    getInput: (body) => body?.data ?? "",
-  },
-  "/v3/consulta/empresas": {
-    tipoConsulta: "EMPRESAS",
-    getInput: (body) => body?.dni ?? "",
-  },
-  "/v3/consulta/matrimonios": {
-    tipoConsulta: "MATRIMONIOS",
-    getInput: (body) => body?.dni ?? "",
-  },
-  "/v3/consulta/buscar-dni": {
-    tipoConsulta: "RENIEC_NOMBRES",
-    getInput: (body) =>
-      [body?.nombres, body?.apepaterno, body?.apematerno].filter(Boolean).join(" "),
-  },
-  "/v3/consulta/buscar-cedula": {
-    tipoConsulta: "CEDULA_NOMBRES",
-    getInput: (body) => body?.query ?? "",
-  },
-  "/v3/consulta/cedula": {
-    tipoConsulta: "CEDULA",
-    getInput: (body) => body?.cedula ?? "",
-  },
-};
-
-const isGoogleSheetsAuditEnabled = () => {
-  const required = [
-    GOOGLE_SHEETS_CREDENTIALS.type,
-    GOOGLE_SHEETS_CREDENTIALS.project_id,
-    GOOGLE_SHEETS_CREDENTIALS.private_key_id,
-    GOOGLE_SHEETS_CREDENTIALS.private_key,
-    GOOGLE_SHEETS_CREDENTIALS.client_email,
-    GOOGLE_SHEETS_CREDENTIALS.client_id,
-    GOOGLE_SHEETS_CREDENTIALS.auth_uri,
-    GOOGLE_SHEETS_CREDENTIALS.token_uri,
-    GOOGLE_SHEETS_CREDENTIALS.auth_provider_x509_cert_url,
-    GOOGLE_SHEETS_CREDENTIALS.client_x509_cert_url,
-    GOOGLE_SHEETS_CREDENTIALS.universe_domain,
-    GOOGLE_SPREADSHEET_ID,
-  ];
-
-  return required.every((value) => typeof value === "string" && value.trim() !== "");
-};
-
-const getGoogleSheetsService = async () => {
-  if (!isGoogleSheetsAuditEnabled()) {
-    return null;
-  }
-
-  if (googleSheetsService) {
-    return googleSheetsService;
-  }
-
-  const auth = new google.auth.JWT({
-    email: GOOGLE_SHEETS_CREDENTIALS.client_email,
-    key: GOOGLE_SHEETS_CREDENTIALS.private_key,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-
-  await auth.authorize();
-
-  googleSheetsService = google.sheets({
-    version: "v4",
-    auth,
-  });
-
-  return googleSheetsService;
-};
-
-const getAuditSheetName = async () => {
-  if (auditSheetNameCache) {
-    return auditSheetNameCache;
-  }
-
-  const sheets = await getGoogleSheetsService();
-  if (!sheets) return null;
-
-  const spreadsheetInfo = await sheets.spreadsheets.get({
-    spreadsheetId: GOOGLE_SPREADSHEET_ID,
-  });
-
-  const firstSheetTitle =
-    spreadsheetInfo?.data?.sheets?.[0]?.properties?.title || "Sheet1";
-
-  auditSheetNameCache = firstSheetTitle;
-  return auditSheetNameCache;
-};
-
-const formatAuditTimestamp = (date) => {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: AUDIT_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-
-  const parts = formatter.formatToParts(date);
-  const map = {};
-
-  for (const part of parts) {
-    if (part.type !== "literal") {
-      map[part.type] = part.value;
-    }
-  }
-
-  return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`;
-};
-
-const getClientIp = (req) => {
-  const forwarded = req.headers["x-forwarded-for"];
-  const realIp =
-    req.headers["cf-connecting-ip"] ||
-    req.headers["x-real-ip"] ||
-    (Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0]) ||
-    req.socket?.remoteAddress ||
-    req.ip ||
-    "unknown";
-
-  return String(realIp).replace(/^::ffff:/, "").trim();
-};
-
-const containsNoResultsText = (text) => {
-  if (!text || typeof text !== "string") return false;
-
-  const normalized = text.toLowerCase();
-
-  const patterns = [
-    "no se encontraron",
-    "no se encontró",
-    "sin resultados",
-    "sin coincidencias",
-    "no existe",
-    "no encontrado",
-    "no encontrada",
-    "no registrado",
-    "no registrada",
-    "not found",
-    "no data",
-    "sin data",
-    "resultado: 0",
-    "0 resultados",
-  ];
-
-  return patterns.some((pattern) => normalized.includes(pattern));
-};
-
-const isEmptyObject = (obj) => {
-  return obj && typeof obj === "object" && !Array.isArray(obj) && Object.keys(obj).length === 0;
-};
-
-const determineAuditStatus = (httpStatus, data) => {
-  if (httpStatus >= 400) {
-    return "ERROR";
-  }
-
-  if (data == null) {
-    return "NO_RESULTS";
-  }
-
-  if (Array.isArray(data)) {
-    return data.length > 0 ? "SUCCESS" : "NO_RESULTS";
-  }
-
-  if (typeof data === "string") {
-    return containsNoResultsText(data) ? "NO_RESULTS" : "SUCCESS";
-  }
-
-  if (typeof data === "object") {
-    const possibleText = [
-      data.message,
-      data.mensaje,
-      data.error,
-      data.detail,
-      data.details,
-    ]
-      .filter(Boolean)
-      .join(" ");
-
-    if (containsNoResultsText(possibleText)) {
-      return "NO_RESULTS";
-    }
-
-    if (data.success === false || data.status === "error" || data.status === "ERROR") {
-      return "ERROR";
-    }
-
-    if (Array.isArray(data.resultados)) {
-      return data.resultados.length > 0 ? "SUCCESS" : "NO_RESULTS";
-    }
-
-    if (Array.isArray(data.data)) {
-      return data.data.length > 0 ? "SUCCESS" : "NO_RESULTS";
-    }
-
-    if (isEmptyObject(data)) {
-      return "NO_RESULTS";
-    }
-
-    return "SUCCESS";
-  }
-
-  return "SUCCESS";
-};
-
-const getAuditInfoFromRequest = (req) => {
-  const config = ENDPOINT_AUDIT_CONFIG[req.path];
-
-  if (!config) {
-    return {
-      tipoConsulta: req.path,
-      inputConsultado: "",
-    };
-  }
-
-  return {
-    tipoConsulta: config.tipoConsulta,
-    inputConsultado: String(config.getInput(req.body) ?? ""),
-  };
-};
-
-const appendAuditLogToGoogleSheets = async (auditPayload) => {
-  try {
-    const sheets = await getGoogleSheetsService();
-    if (!sheets) return;
-
-    const sheetName = await getAuditSheetName();
-    if (!sheetName) return;
-
-    const row = [
-      auditPayload.timestamp,
-      auditPayload.idUsuario,
-      auditPayload.tipoConsulta,
-      auditPayload.inputConsultado,
-      auditPayload.ipOrigen,
-      auditPayload.statusRespuesta,
-      auditPayload.requestId,
-    ];
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: GOOGLE_SPREADSHEET_ID,
-      range: `${sheetName}!A:G`,
-      valueInputOption: "RAW",
-      insertDataOption: "INSERT_ROWS",
-      requestBody: {
-        values: [row],
-      },
-    });
-  } catch (error) {
-    console.error("Error al escribir auditoría en Google Sheets:", error.message);
-  }
-};
-
-const registrarAuditoriaAsync = (req, statusRespuesta) => {
-  try {
-    const { tipoConsulta, inputConsultado } = getAuditInfoFromRequest(req);
-
-    const auditPayload = {
-      timestamp: formatAuditTimestamp(new Date()),
-      idUsuario: req.user?.id || "unknown",
-      tipoConsulta,
-      inputConsultado,
-      ipOrigen: req.clientIp || getClientIp(req),
-      statusRespuesta,
-      requestId: req.requestMeta?.request_id || `req_${Date.now()}`,
-    };
-
-    setImmediate(() => {
-      appendAuditLogToGoogleSheets(auditPayload).catch((error) => {
-        console.error("Error asíncrono de auditoría:", error.message);
-      });
-    });
-  } catch (error) {
-    console.error("Error preparando auditoría:", error.message);
-  }
-};
-
-// -------------------- FIREBASE --------------------
+// -----------------------------------------------------------------------------
+// FIREBASE
+// -----------------------------------------------------------------------------
 const serviceAccount = {
   type: process.env.FIREBASE_TYPE,
   project_id: process.env.FIREBASE_PROJECT_ID,
@@ -394,39 +64,302 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// -------------------- FUNCIONES DE LIMPIEZA DE RESPUESTAS --------------------
+// -----------------------------------------------------------------------------
+// GOOGLE SHEETS AUDITORÍA ASÍNCRONA
+// -----------------------------------------------------------------------------
+const GOOGLE_SHEETS_SCOPES = [
+  "https://www.googleapis.com/auth/spreadsheets",
+];
 
-/**
- * Función mejorada para limpiar y transformar respuestas de APIs de DNI y Cédula
- * Ahora procesa TODOS los resultados sin eliminar ninguno
- * Convierte el texto plano en un array JSON estructurado
- */
+const GOOGLE_SHEET_SPREADSHEET_ID =
+  process.env.ID_DE_HOJA_CALCULO_GOOGLE_SHET || "";
+
+const googleSheetsServiceAccount = {
+  type: process.env.TYPE_GOOGLE_SHET,
+  project_id: process.env.PROJECT_ID_GOOGLE_SHET,
+  private_key_id: process.env.PRIVATE_KEY_ID_GOOGLE_SHET,
+  private_key: process.env.PRIVATE_KEY_GOOGLE_SHET?.replace(/\\n/g, "\n"),
+  client_email: process.env.CLIENT_EMAIL_GOOGLE_SHET,
+  client_id: process.env.CLIENT_ID_GOOGLE_SHET,
+  auth_uri: process.env.AUTH_URI_GOOGLE_SHET,
+  token_uri: process.env.TOKEN_URI_GOOGLE_SHET,
+  auth_provider_x509_cert_url:
+    process.env.AUTH_PROVIDER_X509_CERT_URL_GOOGLE_SHET,
+  client_x509_cert_url: process.env.CLIENT_X509_CERT_URL_GOOGLE_SHET,
+  universe_domain: process.env.UNIVERSE_DOMAIN_GOOGLE_SHET,
+};
+
+const AUDIT_GOOGLE_SHEETS_ENABLED = Boolean(
+  GOOGLE_SHEET_SPREADSHEET_ID &&
+    googleSheetsServiceAccount.client_email &&
+    googleSheetsServiceAccount.private_key
+);
+
+let googleSheetsClientPromise = null;
+let auditSheetTitlePromise = null;
+let auditQueue = Promise.resolve();
+
+const getGoogleSheetsClient = async () => {
+  if (!AUDIT_GOOGLE_SHEETS_ENABLED) {
+    throw new Error(
+      "Auditoría en Google Sheets deshabilitada: faltan secrets requeridos."
+    );
+  }
+
+  if (!googleSheetsClientPromise) {
+    googleSheetsClientPromise = (async () => {
+      const auth = new google.auth.GoogleAuth({
+        credentials: googleSheetsServiceAccount,
+        scopes: GOOGLE_SHEETS_SCOPES,
+      });
+
+      return google.sheets({
+        version: "v4",
+        auth,
+      });
+    })();
+  }
+
+  return googleSheetsClientPromise;
+};
+
+const getAuditSheetTitle = async () => {
+  if (!auditSheetTitlePromise) {
+    auditSheetTitlePromise = (async () => {
+      const sheets = await getGoogleSheetsClient();
+
+      const spreadsheet = await sheets.spreadsheets.get({
+        spreadsheetId: GOOGLE_SHEET_SPREADSHEET_ID,
+        fields: "sheets(properties(title,index))",
+      });
+
+      const firstSheetTitle = spreadsheet?.data?.sheets?.[0]?.properties?.title;
+
+      if (!firstSheetTitle) {
+        throw new Error(
+          "No se pudo determinar la primera pestaña del Google Sheet."
+        );
+      }
+
+      return firstSheetTitle;
+    })();
+  }
+
+  return auditSheetTitlePromise;
+};
+
+const formatAuditTimestamp = (date = new Date()) => {
+  const formatter = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(date);
+  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+
+  return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`;
+};
+
+const obtenerIpOrigen = (req) => {
+  const forwarded = req.headers["x-forwarded-for"];
+  const realIp = req.headers["x-real-ip"];
+  const cfIp = req.headers["cf-connecting-ip"];
+  const rawIp =
+    (typeof forwarded === "string" ? forwarded.split(",")[0].trim() : "") ||
+    realIp ||
+    cfIp ||
+    req.ip ||
+    req.socket?.remoteAddress ||
+    "0.0.0.0";
+
+  return String(rawIp).replace(/^::ffff:/, "");
+};
+
+const obtenerTipoConsultaDesdeRuta = (ruta = "") => {
+  const path = String(ruta).split("?")[0];
+
+  const mapa = {
+    "/v3/consulta/dni": "RENIEC",
+    "/v3/consulta/telefonia-doc": "TELEFONIA",
+    "/v3/consulta/telefonia-num": "TELEFONIA",
+    "/v3/consulta/placa": "SUNARP",
+    "/v3/consulta/ruc": "SUNAT",
+    "/v3/consulta/razon-social": "SUNAT",
+    "/v3/consulta/empresas": "EMPRESAS",
+    "/v3/consulta/matrimonios": "MATRIMONIOS",
+    "/v3/consulta/buscar-dni": "RENIEC",
+    "/v3/consulta/buscar-cedula": "CEDULA",
+    "/v3/consulta/cedula": "CEDULA",
+  };
+
+  return mapa[path] || path || "DESCONOCIDO";
+};
+
+const obtenerInputConsultadoDesdeRequest = (req) => {
+  const path = String(req.originalUrl || "").split("?")[0];
+
+  switch (path) {
+    case "/v3/consulta/dni":
+      return req.body?.dni ?? "";
+    case "/v3/consulta/telefonia-doc":
+      return req.body?.documento ?? "";
+    case "/v3/consulta/telefonia-num":
+      return req.body?.numero ?? "";
+    case "/v3/consulta/placa":
+      return req.body?.placa ?? "";
+    case "/v3/consulta/ruc":
+      return req.body?.data ?? "";
+    case "/v3/consulta/razon-social":
+      return req.body?.data ?? "";
+    case "/v3/consulta/empresas":
+      return req.body?.dni ?? "";
+    case "/v3/consulta/matrimonios":
+      return req.body?.dni ?? "";
+    case "/v3/consulta/buscar-dni":
+      return [req.body?.nombres, req.body?.apepaterno, req.body?.apematerno]
+        .filter(Boolean)
+        .join(" ");
+    case "/v3/consulta/buscar-cedula":
+      return req.body?.query ?? "";
+    case "/v3/consulta/cedula":
+      return req.body?.cedula ?? "";
+    default:
+      return "";
+  }
+};
+
+const determinarStatusRespuesta = ({
+  success,
+  data,
+  httpStatus,
+  statusOverride,
+}) => {
+  if (statusOverride) return statusOverride;
+
+  if (httpStatus === 404) return "NO_RESULTS";
+  if (success === false) return "ERROR";
+
+  if (data == null) return "NO_RESULTS";
+  if (Array.isArray(data) && data.length === 0) return "NO_RESULTS";
+  if (
+    typeof data === "object" &&
+    Array.isArray(data.resultados) &&
+    data.resultados.length === 0
+  ) {
+    return "NO_RESULTS";
+  }
+
+  const serialized = JSON.stringify(data || {}).toLowerCase();
+
+  if (
+    serialized.includes("no_results") ||
+    serialized.includes("no results") ||
+    serialized.includes("sin resultados") ||
+    serialized.includes("no se encontraron") ||
+    serialized.includes("not found") ||
+    serialized.includes("no encontrado")
+  ) {
+    return "NO_RESULTS";
+  }
+
+  return "SUCCESS";
+};
+
+const appendAuditRowToGoogleSheets = async (auditRecord) => {
+  const sheets = await getGoogleSheetsClient();
+  const sheetTitle = await getAuditSheetTitle();
+
+  const values = [
+    [
+      auditRecord.timestamp,
+      auditRecord.idUsuario,
+      auditRecord.tipoConsulta,
+      auditRecord.inputConsultado,
+      auditRecord.ipOrigen,
+      auditRecord.statusRespuesta,
+      auditRecord.requestId,
+    ],
+  ];
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: GOOGLE_SHEET_SPREADSHEET_ID,
+    range: `${sheetTitle}!A:G`,
+    valueInputOption: "RAW",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: {
+      values,
+    },
+  });
+};
+
+const registrarAuditoriaAsync = (auditRecord) => {
+  if (!AUDIT_GOOGLE_SHEETS_ENABLED) {
+    console.warn(
+      "[AUDITORIA] Google Sheets deshabilitado. Verifica tus secrets."
+    );
+    return;
+  }
+
+  auditQueue = auditQueue
+    .then(() => appendAuditRowToGoogleSheets(auditRecord))
+    .catch((error) => {
+      console.error(
+        "[AUDITORIA] Error al escribir en Google Sheets:",
+        error?.response?.data || error.message || error
+      );
+    });
+};
+
+const registrarAuditoriaDeConsulta = (req, meta, success, data, httpStatus, statusOverride = null) => {
+  const auditRecord = {
+    timestamp: formatAuditTimestamp(new Date(meta.timestamp)),
+    idUsuario: req.user?.apiKey || req.headers["x-api-key"] || req.user?.id || "",
+    tipoConsulta: obtenerTipoConsultaDesdeRuta(req.originalUrl),
+    inputConsultado: obtenerInputConsultadoDesdeRequest(req),
+    ipOrigen: obtenerIpOrigen(req),
+    statusRespuesta: determinarStatusRespuesta({
+      success,
+      data,
+      httpStatus,
+      statusOverride,
+    }),
+    requestId: meta.request_id,
+  };
+
+  // 🔥 Importante:
+  // Solo guardamos metadata de auditoría.
+  // NO se almacena el resultado sensible del proveedor.
+  registrarAuditoriaAsync(auditRecord);
+};
+
+// -----------------------------------------------------------------------------
+// FUNCIONES DE LIMPIEZA DE RESPUESTAS
+// -----------------------------------------------------------------------------
 const limpiarRespuestaEspecial = (data) => {
   if (!data || typeof data !== "object") return data;
 
-  // Si no tiene el campo "message" o "status", retornar sin procesar
   if (!data.message || data.status !== "success") {
     return data;
   }
 
   let mensaje = data.message;
 
-  // 🔹 PASO 1: Eliminar información innecesaria del final
-  // Eliminar todo desde "↞" hasta el final (incluyendo Credits, Wanted for, etc.)
   const indiceLimpieza = mensaje.indexOf("↞");
   if (indiceLimpieza !== -1) {
     mensaje = mensaje.substring(0, indiceLimpieza).trim();
   }
 
-  // 🔹 PASO 2: Extraer el texto completo de resultados
   const resultadosCompletos = mensaje;
-
-  // 🔹 PASO 3: Dividir por bloques de cada persona usando el patrón "DNI :"
   const bloques = resultadosCompletos
-    .split(/(?=DNI\s*:\s*\d+\s*-\s*\d+)/g)
+    .split(/(?=DNI\s:\s\d+\s-\s\d+)/g)
     .filter((bloque) => bloque.trim().length > 0);
 
-  // 🔹 PASO 4: Procesar cada bloque individualmente
   const resultados = [];
 
   for (const bloque of bloques) {
@@ -436,7 +369,6 @@ const limpiarRespuestaEspecial = (data) => {
     }
   }
 
-  // 🔹 PASO 5: Si no se encontraron bloques con el patrón, intentar parsear todo el mensaje
   if (resultados.length === 0) {
     const personaUnica = parsearBloquePersona(mensaje);
     if (personaUnica && Object.keys(personaUnica).length > 0) {
@@ -445,19 +377,13 @@ const limpiarRespuestaEspecial = (data) => {
     return data;
   }
 
-  // 🔹 PASO 6: Retornar todos los resultados encontrados
   return {
-    resultados: resultados,
+    resultados,
     total_encontrado: resultados.length,
     mensaje_original: `Se encontraron ${resultados.length} resultados`,
   };
 };
 
-/**
- * Parsea un bloque de texto de una persona y lo convierte en un objeto JSON limpio
- * Ahora extrae TODOS los campos disponibles sin perder información
- * Y elimina específicamente los campos 'credits' y 'wanted_for'
- */
 const parsearBloquePersona = (texto) => {
   if (!texto || typeof texto !== "string") return null;
 
@@ -488,12 +414,12 @@ const parsearBloquePersona = (texto) => {
   };
 
   for (const linea of lineas) {
-    const match = linea.match(/^([A-ZÁÉÍÓÚÑa-záéíóúñ\s]+)\s*:\s*(.+)$/);
+    const match = linea.match(/^([A-ZÁÉÍÓÚÑa-záéíóúñ\s]+)\s:\s(.+)$/);
     if (match) {
       let clave = match[1].trim().toLowerCase();
       const valor = match[2].trim();
 
-      clave = clave.replace(/\s*-\s*\d+$/, "").trim();
+      clave = clave.replace(/\s-\s\d+$/, "").trim();
 
       const claveLower = clave.toLowerCase();
       if (claveLower.includes("credits") || claveLower.includes("wanted")) {
@@ -516,12 +442,6 @@ const parsearBloquePersona = (texto) => {
   return Object.keys(persona).length > 0 ? persona : null;
 };
 
-/**
- * Función para formatear la búsqueda de nombres según las reglas especificadas
- * Convierte "juan perez lopez" en "juan|perez|lopez"
- * Convierte "juan manuel perez lopez" en "juan,manuel|perez|lopez"
- * Convierte "juan del sol lopez" en "juan|del+sol|lopez"
- */
 const formatearBusquedaNombres = (query) => {
   if (!query || typeof query !== "string") return query;
 
@@ -570,7 +490,9 @@ const formatearBusquedaNombres = (query) => {
   return `${nombresFormateados}|${apellidoPaterno}|${apellidoMaterno}`;
 };
 
-// -------------------- MIDDLEWARE DE AUTENTICACIÓN --------------------
+// -----------------------------------------------------------------------------
+// MIDDLEWARE DE AUTENTICACIÓN
+// -----------------------------------------------------------------------------
 const authMiddleware = async (req, res, next) => {
   if (req.method === "OPTIONS") {
     return next();
@@ -593,7 +515,7 @@ const authMiddleware = async (req, res, next) => {
 
   try {
     const usersRef = db.collection("usuarios");
-    const snapshot = await usersRef.where("apiKey", "==", token).get();
+    const snapshot = await usersRef.where("apiKey", "==", token).limit(1).get();
 
     if (snapshot.empty) {
       return res.status(403).json({
@@ -607,45 +529,59 @@ const authMiddleware = async (req, res, next) => {
     const userId = userDoc.id;
 
     const validPlans = ["creditos", "ilimitado"];
-
     if (!validPlans.includes(userData.tipoPlan)) {
       return res.status(403).json({
         success: false,
-        error: "Tu plan no es válido o está deshabilitado. Recarga o contacta a soporte.",
+        error:
+          "Tu plan no es válido o está deshabilitado. Recarga o contacta a soporte.",
       });
     }
 
     if (userData.tipoPlan === "creditos") {
       if ((userData.creditos ?? 0) <= 0) {
-        return res.status(402).json({
+        return res.status(403).json({
           success: false,
-          error: "No te quedan créditos, recarga tu plan para seguir consultando",
+          error: "Créditos insuficientes. Recarga para seguir consultando.",
         });
       }
     }
 
     if (userData.tipoPlan === "ilimitado") {
-      const fechaActivacion = userData.fechaActivacion
-        ? userData.fechaActivacion.toDate()
-        : null;
-      const duracion = userData.duracionDias || 0;
+      const fechaActivacionRaw =
+        userData.fechaActivacionIlimitado ||
+        userData.fechaActivacion ||
+        userData.fechaInicio ||
+        userData.fecha_inicio ||
+        null;
 
-      if (fechaActivacion && duracion > 0) {
-        const fechaFin = new Date(fechaActivacion);
-        fechaFin.setDate(fechaFin.getDate() + duracion);
+      const duracion =
+        Number(
+          userData.duracionIlimitadoDias ||
+            userData.duracionDias ||
+            userData.duracion ||
+            0
+        ) || 0;
 
-        const hoy = new Date();
-        if (hoy > fechaFin) {
-          return res.status(403).json({
-            success: false,
-            error: "Sorpresa, tu plan ilimitado ha vencido, renueva tu plan para seguir consultando",
-          });
+      // Si existen ambos campos, se valida expiración.
+      // Si no existen, no bloqueamos para evitar romper tu lógica actual.
+      if (fechaActivacionRaw && duracion > 0) {
+        const fechaActivacion = fechaActivacionRaw.toDate
+          ? fechaActivacionRaw.toDate()
+          : new Date(fechaActivacionRaw);
+
+        if (!Number.isNaN(fechaActivacion.getTime())) {
+          const fechaFin = new Date(fechaActivacion);
+          fechaFin.setDate(fechaFin.getDate() + duracion);
+
+          const hoy = new Date();
+          if (hoy > fechaFin) {
+            return res.status(403).json({
+              success: false,
+              error:
+                "Sorpresa, tu plan ilimitado ha vencido, renueva tu plan para seguir consultando",
+            });
+          }
         }
-      } else {
-        return res.status(403).json({
-          success: false,
-          error: "Tu plan ilimitado no es válido, por favor contacta soporte",
-        });
       }
     }
 
@@ -653,7 +589,7 @@ const authMiddleware = async (req, res, next) => {
     next();
   } catch (error) {
     console.error("Error en middleware:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: "Error interno al validar el token",
     });
@@ -664,30 +600,37 @@ const creditosMiddleware = (costo) => {
   return async (req, res, next) => {
     if (req.method === "OPTIONS") return next();
 
-    const domain = req.headers.origin || req.headers.referer || "Unknown/Direct Access";
+    const domain =
+      req.headers.origin || req.headers.referer || "Unknown/Direct Access";
 
     if (req.user.tipoPlan === "creditos") {
       const currentCredits = req.user.creditos ?? 0;
 
       if (currentCredits < costo) {
-        return res.status(402).json({
+        return res.status(403).json({
           success: false,
-          error: `Créditos insuficientes (Se requerían ${costo} créditos). Saldo actual: ${currentCredits}`,
+          error: `Créditos insuficientes. Se requieren ${costo} créditos para esta consulta.`,
         });
       }
     }
 
     req.logData = {
-      domain: domain,
-      cost: req.user.tipoPlan === "creditos" ? costo : 0,
-      endpoint: req.path,
+      domain,
+      endpoint: req.originalUrl,
+      userId: req.user.id,
+      cost: costo,
+      timestamp: new Date(),
     };
 
     next();
   };
 };
 
-// -------------------- FUNCIONES DE APOYO --------------------
+// -----------------------------------------------------------------------------
+// HELPERS GENERALES
+// -----------------------------------------------------------------------------
+const safeEncode = (value) => encodeURIComponent(String(value ?? ""));
+
 const generateMetaData = () => {
   return {
     version: "3.0.0",
@@ -705,37 +648,33 @@ const generateUserPlanData = (user) => {
 };
 
 const deducirCreditosFirebase = async (req, costo) => {
+  if (req.user.tipoPlan !== "creditos" || costo <= 0) return;
+
   const userRef = db.collection("usuarios").doc(req.user.id);
   const currentTime = new Date();
-  const domain = req.logData.domain;
+  const domain = req.logData?.domain || "Unknown/Direct Access";
 
-  if (req.user.tipoPlan === "creditos" && costo > 0) {
-    try {
-      await db.runTransaction(async (t) => {
-        const freshUserDoc = await t.get(userRef);
-        const currentCredits = freshUserDoc.data().creditos ?? 0;
+  await db.runTransaction(async (t) => {
+    const freshUserDoc = await t.get(userRef);
+    const currentCredits = freshUserDoc.data()?.creditos ?? 0;
 
-        if (currentCredits < costo) {
-          throw new Error("Saldo insuficiente durante la deducción atómica");
-        }
-
-        t.update(userRef, {
-          creditos: currentCredits - costo,
-          ultimaConsulta: currentTime,
-          ultimoDominio: domain,
-        });
-
-        req.user.creditos = currentCredits - costo;
-      });
-    } catch (e) {
-      console.error("Error crítico al deducir créditos:", e.message);
+    if (currentCredits < costo) {
+      throw new Error("CREDITOS_INSUFICIENTES");
     }
-  } else if (req.user.tipoPlan === "ilimitado") {
-    await userRef.update({
+
+    t.update(userRef, {
+      creditos: admin.firestore.FieldValue.increment(-costo),
       ultimaConsulta: currentTime,
-      ultimoDominio: domain,
+      ultimoConsumo: {
+        endpoint: req.originalUrl,
+        costo,
+        fecha: currentTime,
+        dominio: domain,
+      },
     });
-  }
+  });
+
+  req.user.creditos = Math.max((req.user.creditos ?? 0) - costo, 0);
 };
 
 const guardarLogExterno = async (logData) => {
@@ -746,10 +685,12 @@ const guardarLogExterno = async (logData) => {
     logData.domain
   )}&hora=${encodeURIComponent(horaConsulta)}&endpoint=${encodeURIComponent(
     logData.endpoint
-  )}&userId=${encodeURIComponent(logData.userId)}&costo=${logData.cost}`;
+  )}&userId=${encodeURIComponent(logData.userId)}&costo=${encodeURIComponent(
+    logData.cost
+  )}`;
 
   try {
-    await axios.get(url);
+    await axios.get(url, { timeout: 5000 });
   } catch (e) {
     console.error("Error al guardar log en API externa:", e.message);
   }
@@ -798,6 +739,30 @@ const formatoRespuestaEstandar = (success, data, user, metadata = null) => {
   };
 };
 
+const enviarRespuestaFinal = (
+  req,
+  res,
+  httpStatus,
+  success,
+  data,
+  meta,
+  statusOverride = null
+) => {
+  const respuesta = formatoRespuestaEstandar(success, data, req.user, meta);
+
+  res.status(httpStatus).json(respuesta);
+
+  // Auditoría asíncrona, sin bloquear la respuesta al cliente
+  registrarAuditoriaDeConsulta(
+    req,
+    meta,
+    success,
+    data,
+    httpStatus,
+    statusOverride
+  );
+};
+
 const consumirAPIProveedor = async (
   req,
   res,
@@ -805,333 +770,368 @@ const consumirAPIProveedor = async (
   costo,
   aplicarLimpiezaEspecial = false
 ) => {
+  const meta = generateMetaData();
+
   try {
-    const response = await axios.get(url);
+    const response = await axios.get(url, {
+      timeout: 30000,
+    });
 
-    if (response.status >= 200 && response.status < 300) {
-      await deducirCreditosFirebase(req, costo);
+    let providerData = response.data;
 
-      const logData = {
-        userId: req.user.id,
-        timestamp: new Date(),
-        ...req.logData,
-      };
+    if (aplicarLimpiezaEspecial) {
+      providerData = limpiarRespuestaEspecial(providerData);
+    }
 
-      // Mantener intacta la lógica actual
-      guardarLogExterno(logData);
+    providerData = limpiarRespuestaProveedor(providerData);
 
-      let dataFinal = response.data;
-      if (aplicarLimpiezaEspecial) {
-        dataFinal = limpiarRespuestaEspecial(response.data);
-      }
+    // Mantener lógica actual de créditos
+    await deducirCreditosFirebase(req, costo);
 
-      const auditStatus = determineAuditStatus(response.status, dataFinal);
-      registrarAuditoriaAsync(req, auditStatus);
+    // Mantener log externo sin bloquear la respuesta
+    guardarLogExterno(req.logData).catch((error) => {
+      console.error("Error guardando log externo:", error.message);
+    });
 
-      return res.json(
-        formatoRespuestaEstandar(true, dataFinal, req.user, req.requestMeta)
-      );
-    } else {
-      const auditStatus = determineAuditStatus(response.status, response.data);
-      registrarAuditoriaAsync(req, auditStatus);
-
-      return res.status(response.status).json(
-        formatoRespuestaEstandar(false, response.data, req.user, req.requestMeta)
+    return enviarRespuestaFinal(req, res, 200, true, providerData, meta);
+  } catch (error) {
+    if (error.message === "CREDITOS_INSUFICIENTES") {
+      return enviarRespuestaFinal(
+        req,
+        res,
+        409,
+        false,
+        { error: "No fue posible descontar los créditos. Intenta nuevamente." },
+        meta,
+        "ERROR"
       );
     }
-  } catch (error) {
-    console.error("Error al consumir API:", error.message);
 
-    const httpStatus = error.response ? error.response.status : 500;
-    const errorData = error.response ? error.response.data : { error: error.message };
+    const httpStatus = error.response?.status || 500;
+    let providerData =
+      error.response?.data || { error: "Error en la consulta, intenta nuevamente" };
 
-    const auditStatus = determineAuditStatus(httpStatus, errorData);
-    registrarAuditoriaAsync(req, auditStatus);
+    if (aplicarLimpiezaEspecial) {
+      providerData = limpiarRespuestaEspecial(providerData);
+    }
 
-    return res.status(httpStatus).json(
-      formatoRespuestaEstandar(false, errorData, req.user, req.requestMeta)
+    providerData = limpiarRespuestaProveedor(providerData);
+
+    const statusOverride = httpStatus === 404 ? "NO_RESULTS" : "ERROR";
+
+    return enviarRespuestaFinal(
+      req,
+      res,
+      httpStatus,
+      false,
+      providerData,
+      meta,
+      statusOverride
     );
   }
 };
 
-// -------------------- RUTAS SEGURAS (SOLO POST) --------------------
+// -----------------------------------------------------------------------------
+// ENDPOINTS
+// -----------------------------------------------------------------------------
 
-// 1. RENIEC (7 créditos) -> /v3/consulta/dni
+// 1. DNI por número (7 créditos) -> /v3/consulta/dni
 app.post("/v3/consulta/dni", authMiddleware, creditosMiddleware(7), async (req, res) => {
   const { dni } = req.body;
+
   if (!dni) {
-    registrarAuditoriaAsync(req, "ERROR");
-    return res.status(400).json(
-      formatoRespuestaEstandar(
-        false,
-        { error: "DNI requerido en el body" },
-        req.user,
-        req.requestMeta
-      )
-    );
+    return res
+      .status(400)
+      .json(
+        formatoRespuestaEstandar(
+          false,
+          { error: "DNI requerido en el body" },
+          req.user
+        )
+      );
   }
-  await consumirAPIProveedor(req, res, `${API_URL_RENIEC}/reniec?dni=${dni}`, 7);
+
+  await consumirAPIProveedor(
+    req,
+    res,
+    `${API_URL_RENIEC}/reniec?dni=${safeEncode(dni)}`,
+    7
+  );
 });
 
 // 2. Telefonía por Documento (9 créditos) -> /v3/consulta/telefonia-doc
-app.post(
-  "/v3/consulta/telefonia-doc",
-  authMiddleware,
-  creditosMiddleware(9),
-  async (req, res) => {
-    const { documento } = req.body;
-    if (!documento) {
-      registrarAuditoriaAsync(req, "ERROR");
-      return res.status(400).json(
+app.post("/v3/consulta/telefonia-doc", authMiddleware, creditosMiddleware(9), async (req, res) => {
+  const { documento } = req.body;
+
+  if (!documento) {
+    return res
+      .status(400)
+      .json(
         formatoRespuestaEstandar(
           false,
           { error: "Documento requerido en el body" },
-          req.user,
-          req.requestMeta
+          req.user
         )
       );
-    }
-    await consumirAPIProveedor(
-      req,
-      res,
-      `${API_URL_TELEFONIA}/telefonia-doc?documento=${documento}`,
-      9
-    );
   }
-);
+
+  await consumirAPIProveedor(
+    req,
+    res,
+    `${API_URL_TELEFONIA}/telefonia-doc?documento=${safeEncode(documento)}`,
+    9
+  );
+});
 
 // 3. Telefonía por Número de Teléfono (8 créditos) -> /v3/consulta/telefonia-num
-app.post(
-  "/v3/consulta/telefonia-num",
-  authMiddleware,
-  creditosMiddleware(8),
-  async (req, res) => {
-    const { numero } = req.body;
-    if (!numero) {
-      registrarAuditoriaAsync(req, "ERROR");
-      return res.status(400).json(
+app.post("/v3/consulta/telefonia-num", authMiddleware, creditosMiddleware(8), async (req, res) => {
+  const { numero } = req.body;
+
+  if (!numero) {
+    return res
+      .status(400)
+      .json(
         formatoRespuestaEstandar(
           false,
           { error: "Número requerido en el body" },
-          req.user,
-          req.requestMeta
+          req.user
         )
       );
-    }
-    await consumirAPIProveedor(
-      req,
-      res,
-      `${API_URL_TELEFONIA}/telefonia-num?numero=${numero}`,
-      8
-    );
   }
-);
+
+  await consumirAPIProveedor(
+    req,
+    res,
+    `${API_URL_TELEFONIA}/telefonia-num?numero=${safeEncode(numero)}`,
+    8
+  );
+});
 
 // 4. Datos SUNARP (8 créditos) -> /v3/consulta/placa
 app.post("/v3/consulta/placa", authMiddleware, creditosMiddleware(8), async (req, res) => {
   const { placa } = req.body;
+
   if (!placa) {
-    registrarAuditoriaAsync(req, "ERROR");
-    return res.status(400).json(
-      formatoRespuestaEstandar(
-        false,
-        { error: "Placa requerida en el body" },
-        req.user,
-        req.requestMeta
-      )
-    );
+    return res
+      .status(400)
+      .json(
+        formatoRespuestaEstandar(
+          false,
+          { error: "Placa requerida en el body" },
+          req.user
+        )
+      );
   }
-  await consumirAPIProveedor(req, res, `${API_URL_SUNARP}/vehiculos?placa=${placa}`, 8);
+
+  await consumirAPIProveedor(
+    req,
+    res,
+    `${API_URL_SUNARP}/vehiculos?placa=${safeEncode(placa)}`,
+    8
+  );
 });
 
 // 5. SUNAT por RUC (6 créditos) -> /v3/consulta/ruc
 app.post("/v3/consulta/ruc", authMiddleware, creditosMiddleware(6), async (req, res) => {
   const { data } = req.body;
+
   if (!data) {
-    registrarAuditoriaAsync(req, "ERROR");
-    return res.status(400).json(
-      formatoRespuestaEstandar(
-        false,
-        { error: "RUC requerido en el body" },
-        req.user,
-        req.requestMeta
-      )
-    );
+    return res
+      .status(400)
+      .json(
+        formatoRespuestaEstandar(
+          false,
+          { error: "RUC requerido en el body" },
+          req.user
+        )
+      );
   }
 
-  const apiUrl = `${API_URL_SUNAT}${data}?token=${TOKEN_SUNAT}`;
+  const apiUrl = `${API_URL_SUNAT}${safeEncode(data)}?token=${safeEncode(
+    TOKEN_SUNAT
+  )}`;
+
   await consumirAPIProveedor(req, res, apiUrl, 6);
 });
 
 // 6. SUNAT por Razón Social (5 créditos) -> /v3/consulta/razon-social
-app.post(
-  "/v3/consulta/razon-social",
-  authMiddleware,
-  creditosMiddleware(5),
-  async (req, res) => {
-    const { data } = req.body;
-    if (!data) {
-      registrarAuditoriaAsync(req, "ERROR");
-      return res.status(400).json(
+app.post("/v3/consulta/razon-social", authMiddleware, creditosMiddleware(5), async (req, res) => {
+  const { data } = req.body;
+
+  if (!data) {
+    return res
+      .status(400)
+      .json(
         formatoRespuestaEstandar(
           false,
           { error: "Razón social requerida en el body" },
-          req.user,
-          req.requestMeta
+          req.user
         )
       );
-    }
-
-    const API_URL_SUNAT_RAZON =
-      process.env.API_URL_SUNAT_RAZON ||
-      "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
-
-    await consumirAPIProveedor(req, res, `${API_URL_SUNAT_RAZON}/sunat-razon?data=${data}`, 5);
   }
-);
+
+  const API_URL_SUNAT_RAZON =
+    process.env.API_URL_SUNAT_RAZON ||
+    "https://banckend-poxyv1-cosultape-masitaprex.fly.dev";
+
+  await consumirAPIProveedor(
+    req,
+    res,
+    `${API_URL_SUNAT_RAZON}/sunat-razon?data=${safeEncode(data)}`,
+    5
+  );
+});
 
 // 7. Empresas donde figura (4 créditos) -> /v3/consulta/empresas
-app.post(
-  "/v3/consulta/empresas",
-  authMiddleware,
-  creditosMiddleware(4),
-  async (req, res) => {
-    const { dni } = req.body;
-    if (!dni) {
-      registrarAuditoriaAsync(req, "ERROR");
-      return res.status(400).json(
+app.post("/v3/consulta/empresas", authMiddleware, creditosMiddleware(4), async (req, res) => {
+  const { dni } = req.body;
+
+  if (!dni) {
+    return res
+      .status(400)
+      .json(
         formatoRespuestaEstandar(
           false,
           { error: "DNI requerido en el body" },
-          req.user,
-          req.requestMeta
+          req.user
         )
       );
-    }
-    await consumirAPIProveedor(req, res, `${API_URL_EMPRESAS}/empresas?dni=${dni}`, 4);
   }
-);
+
+  await consumirAPIProveedor(
+    req,
+    res,
+    `${API_URL_EMPRESAS}/empresas?dni=${safeEncode(dni)}`,
+    4
+  );
+});
 
 // 8. Matrimonios Registrados (6 créditos) -> /v3/consulta/matrimonios
-app.post(
-  "/v3/consulta/matrimonios",
-  authMiddleware,
-  creditosMiddleware(6),
-  async (req, res) => {
-    const { dni } = req.body;
-    if (!dni) {
-      registrarAuditoriaAsync(req, "ERROR");
-      return res.status(400).json(
+app.post("/v3/consulta/matrimonios", authMiddleware, creditosMiddleware(6), async (req, res) => {
+  const { dni } = req.body;
+
+  if (!dni) {
+    return res
+      .status(400)
+      .json(
         formatoRespuestaEstandar(
           false,
           { error: "DNI requerido en el body" },
-          req.user,
-          req.requestMeta
+          req.user
         )
       );
-    }
-    await consumirAPIProveedor(req, res, `${API_URL_MATRIMONIOS}/matrimonios?dni=${dni}`, 6);
   }
-);
+
+  await consumirAPIProveedor(
+    req,
+    res,
+    `${API_URL_MATRIMONIOS}/matrimonios?dni=${safeEncode(dni)}`,
+    6
+  );
+});
 
 // 9. BUSCAR DNI POR NOMBRES (5 créditos) -> /v3/consulta/buscar-dni
-app.post(
-  "/v3/consulta/buscar-dni",
-  authMiddleware,
-  creditosMiddleware(5),
-  async (req, res) => {
-    const { nombres, apepaterno, apematerno } = req.body;
-    if (!nombres || !apepaterno || !apematerno) {
-      registrarAuditoriaAsync(req, "ERROR");
-      return res.status(400).json(
-        formatoRespuestaEstandar(
-          false,
-          { error: "Nombres y apellidos requeridos en el body" },
-          req.user,
-          req.requestMeta
-        )
-      );
-    }
+app.post("/v3/consulta/buscar-dni", authMiddleware, creditosMiddleware(5), async (req, res) => {
+  const { nombres, apepaterno, apematerno } = req.body;
 
-    await consumirAPIProveedor(
-      req,
-      res,
-      `${API_URL_DNI_NOMBRES}/dni_nombres?nombres=${nombres}&apepaterno=${apepaterno}&apematerno=${apematerno}`,
-      5,
-      true
+  if (!nombres || !apepaterno || !apematerno) {
+    return res.status(400).json(
+      formatoRespuestaEstandar(
+        false,
+        { error: "Nombres y apellidos requeridos en el body" },
+        req.user
+      )
     );
   }
-);
+
+  await consumirAPIProveedor(
+    req,
+    res,
+    `${API_URL_DNI_NOMBRES}/dni_nombres?nombres=${safeEncode(
+      nombres
+    )}&apepaterno=${safeEncode(apepaterno)}&apematerno=${safeEncode(apematerno)}`,
+    5,
+    true
+  );
+});
 
 // 10. BUSCAR CÉDULA POR NOMBRES (5 créditos) -> /v3/consulta/buscar-cedula
-app.post(
-  "/v3/consulta/buscar-cedula",
-  authMiddleware,
-  creditosMiddleware(5),
-  async (req, res) => {
-    const { query } = req.body;
-    if (!query) {
-      registrarAuditoriaAsync(req, "ERROR");
-      return res.status(400).json(
+app.post("/v3/consulta/buscar-cedula", authMiddleware, creditosMiddleware(5), async (req, res) => {
+  const { query } = req.body;
+
+  if (!query) {
+    return res
+      .status(400)
+      .json(
         formatoRespuestaEstandar(
           false,
           { error: "Query requerido en el body" },
-          req.user,
-          req.requestMeta
+          req.user
         )
       );
-    }
-
-    const queryFormateado = formatearBusquedaNombres(query);
-
-    await consumirAPIProveedor(
-      req,
-      res,
-      `${API_URL_VENEZOLANOS}/venezolanos_nombres?query=${encodeURIComponent(queryFormateado)}`,
-      5,
-      true
-    );
   }
-);
+
+  const queryFormateado = formatearBusquedaNombres(query);
+
+  await consumirAPIProveedor(
+    req,
+    res,
+    `${API_URL_VENEZOLANOS}/venezolanos_nombres?query=${safeEncode(
+      queryFormateado
+    )}`,
+    5,
+    true
+  );
+});
 
 // 11. CONSULTAR CÉDULA (5 créditos) -> /v3/consulta/cedula
 app.post("/v3/consulta/cedula", authMiddleware, creditosMiddleware(5), async (req, res) => {
   const { cedula } = req.body;
+
   if (!cedula) {
-    registrarAuditoriaAsync(req, "ERROR");
-    return res.status(400).json(
-      formatoRespuestaEstandar(
-        false,
-        { error: "Cédula requerida en el body" },
-        req.user,
-        req.requestMeta
-      )
-    );
+    return res
+      .status(400)
+      .json(
+        formatoRespuestaEstandar(
+          false,
+          { error: "Cédula requerida en el body" },
+          req.user
+        )
+      );
   }
-  await consumirAPIProveedor(req, res, `${API_URL_CEDULA}/cedula?cedula=${cedula}`, 5, true);
+
+  await consumirAPIProveedor(
+    req,
+    res,
+    `${API_URL_CEDULA}/cedula?cedula=${safeEncode(cedula)}`,
+    5,
+    true
+  );
 });
 
-// -------------------- ENDPOINT RAIZ (HEALTH CHECK) --------------------
+// -----------------------------------------------------------------------------
+// ENDPOINT RAÍZ (HEALTH CHECK)
+// -----------------------------------------------------------------------------
 app.get("/", (req, res) => {
   res.json({
     success: true,
     message: "🚀 API Consulta PE Segura v3.0.0 funcionando",
-    meta: req.requestMeta || generateMetaData(),
+    meta: generateMetaData(),
     security: {
       mode: "Strict POST",
       encryption: "TLS/SSL Enforced via Edge",
     },
+    audit: {
+      googleSheets: AUDIT_GOOGLE_SHEETS_ENABLED ? "enabled" : "disabled",
+      zeroStoragePolicy: true,
+    },
   });
 });
 
-// -------------------- SERVER --------------------
+// -----------------------------------------------------------------------------
+// SERVER
+// -----------------------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Servidor Seguro corriendo en http://0.0.0.0:${PORT}`);
-
-  if (isGoogleSheetsAuditEnabled()) {
-    console.log("✅ Auditoría con Google Sheets habilitada");
-  } else {
-    console.warn("⚠️ Auditoría con Google Sheets deshabilitada por falta de secrets");
-  }
 });
