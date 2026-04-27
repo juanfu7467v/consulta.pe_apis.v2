@@ -731,7 +731,7 @@ const formatoRespuestaEstandar = (success, data, user, metadata = null) => {
     meta,
     "consulta-pe": {
       poweredBy: "Intermediario Consulta Pe v2",
-      status: "Verified Source",
+      Origin: "Remote Provider",
       userPlan: generateUserPlanData(user),
     },
     disclaimer:
